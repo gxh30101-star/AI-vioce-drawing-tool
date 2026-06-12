@@ -179,6 +179,75 @@ class SpeechManager {
   }
 }
 
+// ===== Image Generator =====
+class ImageGenerator {
+  constructor(serverUrl = '') {
+    this.serverUrl = serverUrl;
+    this.isGenerating = false;
+    this.services = [
+      this._tryPollinations.bind(this),
+      this._tryCraiyon.bind(this),
+    ];
+  }
+
+  async generate(prompt, width = 1024, height = 768) {
+    this.isGenerating = true;
+
+    for (const service of this.services) {
+      try {
+        const result = await service(prompt, width, height);
+        if (result) {
+          this.isGenerating = false;
+          return result;
+        }
+      } catch (err) {
+        console.warn('Service failed:', err.message);
+      }
+    }
+
+    this.isGenerating = false;
+    throw new Error('所有图片生成服务都失败了，请稍后再试');
+  }
+
+  async _tryPollinations(prompt, width, height) {
+    const encodedPrompt = encodeURIComponent(prompt);
+    // Add random seed to bypass rate limit
+    const seed = Math.floor(Math.random() * 999999);
+    const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${width}&height=${height}&nologo=true&seed=${seed}`;
+
+    const res = await fetch(url, { mode: 'cors' });
+    if (!res.ok) return null;
+
+    const blob = await res.blob();
+    if (!blob.type.startsWith('image/')) return null;
+
+    return URL.createObjectURL(blob);
+  }
+
+  async _tryCraiyon(prompt, width, height) {
+    // Use Craiyon API (free, no key needed)
+    const res = await fetch('https://api.craiyon.com/v3', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt: prompt,
+        negative_prompt: '',
+        model: 'art',
+      }),
+    });
+
+    if (!res.ok) return null;
+
+    const data = await res.json();
+    if (!data.images || data.images.length === 0) return null;
+
+    // Craiyon returns base64 images
+    const imageData = data.images[0];
+    const blob = await fetch(`data:image/jpeg;base64,${imageData}`).then(r => r.blob());
+    return URL.createObjectURL(blob);
+  }
+}
+
 // ===== Agent Engine (Local Intelligent Parser) =====
 class AgentEngine {
   constructor() {
@@ -187,217 +256,47 @@ class AgentEngine {
   }
 
   // Scene templates: keywords → drawing command sequences
-  static SCENES = {
-    '日落': {
-      reply: '为你画一幅日落美景',
-      commands: [
-        { action: 'draw', shape: 'rect', color: '#f39c12', size: 'xlarge', position: 'bottom' },
-        { action: 'draw', shape: 'circle', color: '#e74c3c', size: 'large', position: 'center' },
-        { action: 'draw', shape: 'circle', color: '#f1c40f', size: 'medium', position: 'center' },
-        { action: 'draw', shape: 'wavy', color: '#3498db', size: 'xlarge', position: 'bottom-left' },
-        { action: 'draw', shape: 'wavy', color: '#2980b9', size: 'large', position: 'bottom-right' },
-      ]
-    },
-    '夕阳': { alias: '日落' },
-    '海滩': {
-      reply: '为你画一片海滩风景',
-      commands: [
-        { action: 'draw', shape: 'rect', color: '#f1c40f', size: 'xlarge', position: 'bottom' },
-        { action: 'draw', shape: 'wavy', color: '#3498db', size: 'xlarge', position: 'center' },
-        { action: 'draw', shape: 'circle', color: '#f39c12', size: 'large', position: 'top-right' },
-        { action: 'draw', shape: 'wavy', color: '#2980b9', size: 'large', position: 'bottom' },
-        { action: 'draw', shape: 'triangle', color: '#27ae60', size: 'medium', position: 'top-left' },
-      ]
-    },
-    '沙滩': { alias: '海滩' },
-    '城堡': {
-      reply: '为你画一座城堡',
-      commands: [
-        { action: 'draw', shape: 'rect', color: '#95a5a6', size: 'large', position: 'center' },
-        { action: 'draw', shape: 'rect', color: '#7f8c8d', size: 'medium', position: 'top-left' },
-        { action: 'draw', shape: 'rect', color: '#7f8c8d', size: 'medium', position: 'top-right' },
-        { action: 'draw', shape: 'triangle', color: '#e74c3c', size: 'medium', position: 'top-left' },
-        { action: 'draw', shape: 'triangle', color: '#e74c3c', size: 'medium', position: 'top-right' },
-        { action: 'draw', shape: 'rect', color: '#6c3483', size: 'small', position: 'center' },
-        { action: 'draw', shape: 'rect', color: '#2c3e50', size: 'small', position: 'bottom' },
-      ]
-    },
-    '房子': {
-      reply: '为你画一座房子',
-      commands: [
-        { action: 'draw', shape: 'rect', color: '#e67e22', size: 'large', position: 'center' },
-        { action: 'draw', shape: 'triangle', color: '#c0392b', size: 'large', position: 'top' },
-        { action: 'draw', shape: 'rect', color: '#8b4513', size: 'small', position: 'bottom' },
-        { action: 'draw', shape: 'rect', color: '#3498db', size: 'small', position: 'top-left' },
-        { action: 'draw', shape: 'rect', color: '#3498db', size: 'small', position: 'top-right' },
-      ]
-    },
-    '花园': {
-      reply: '为你画一座花园',
-      commands: [
-        { action: 'draw', shape: 'rect', color: '#27ae60', size: 'xlarge', position: 'bottom' },
-        { action: 'draw', shape: 'circle', color: '#e91e63', size: 'medium', position: 'bottom-left' },
-        { action: 'draw', shape: 'circle', color: '#f1c40f', size: 'medium', position: 'bottom' },
-        { action: 'draw', shape: 'circle', color: '#9b59b6', size: 'medium', position: 'bottom-right' },
-        { action: 'draw', shape: 'circle', color: '#e74c3c', size: 'small', position: 'left' },
-        { action: 'draw', shape: 'circle', color: '#3498db', size: 'small', position: 'right' },
-        { action: 'draw', shape: 'circle', color: '#f39c12', size: 'xlarge', position: 'top-right' },
-      ]
-    },
-    '星空': {
-      reply: '为你画一片星空',
-      commands: [
-        { action: 'draw', shape: 'rect', color: '#0f0f2a', size: 'xlarge', position: 'center' },
-        { action: 'draw', shape: 'star', color: '#f1c40f', size: 'small', position: 'top-left' },
-        { action: 'draw', shape: 'star', color: '#ffffff', size: 'small', position: 'top' },
-        { action: 'draw', shape: 'star', color: '#f1c40f', size: 'medium', position: 'top-right' },
-        { action: 'draw', shape: 'star', color: '#ffffff', size: 'small', position: 'left' },
-        { action: 'draw', shape: 'star', color: '#f1c40f', size: 'small', position: 'right' },
-        { action: 'draw', shape: 'circle', color: '#ecf0f1', size: 'large', position: 'top' },
-      ]
-    },
-    '夜空': { alias: '星空' },
-    '山水': {
-      reply: '为你画一幅山水画',
-      commands: [
-        { action: 'draw', shape: 'rect', color: '#ecf0f1', size: 'xlarge', position: 'bottom' },
-        { action: 'draw', shape: 'triangle', color: '#27ae60', size: 'xlarge', position: 'bottom-left' },
-        { action: 'draw', shape: 'triangle', color: '#2ecc71', size: 'large', position: 'bottom-right' },
-        { action: 'draw', shape: 'wavy', color: '#3498db', size: 'large', position: 'bottom' },
-        { action: 'draw', shape: 'circle', color: '#f1c40f', size: 'medium', position: 'top-right' },
-      ]
-    },
-    '雪人': {
-      reply: '为你画一个雪人',
-      commands: [
-        { action: 'draw', shape: 'circle', color: '#ecf0f1', size: 'xlarge', position: 'bottom' },
-        { action: 'draw', shape: 'circle', color: '#ecf0f1', size: 'large', position: 'center' },
-        { action: 'draw', shape: 'circle', color: '#ecf0f1', size: 'medium', position: 'top' },
-        { action: 'draw', shape: 'circle', color: '#2c3e50', size: 'small', position: 'top-left' },
-        { action: 'draw', shape: 'circle', color: '#2c3e50', size: 'small', position: 'top-right' },
-        { action: 'draw', shape: 'triangle', color: '#e67e22', size: 'small', position: 'center' },
-      ]
-    },
-    '太阳': {
-      reply: '为你画一个太阳',
-      commands: [
-        { action: 'draw', shape: 'circle', color: '#f1c40f', size: 'xlarge', position: 'center' },
-        { action: 'draw', shape: 'star', color: '#f39c12', size: 'xlarge', position: 'center' },
-      ]
-    },
-    '树': {
-      reply: '为你画一棵树',
-      commands: [
-        { action: 'draw', shape: 'rect', color: '#795548', size: 'medium', position: 'bottom' },
-        { action: 'draw', shape: 'circle', color: '#27ae60', size: 'xlarge', position: 'center' },
-        { action: 'draw', shape: 'circle', color: '#2ecc71', size: 'large', position: 'top-left' },
-        { action: 'draw', shape: 'circle', color: '#27ae60', size: 'large', position: 'top-right' },
-      ]
-    },
-    '大树': { alias: '树' },
-    '猫': {
-      reply: '为你画一只猫',
-      commands: [
-        { action: 'draw', shape: 'circle', color: '#e67e22', size: 'large', position: 'center' },
-        { action: 'draw', shape: 'triangle', color: '#e67e22', size: 'small', position: 'top-left' },
-        { action: 'draw', shape: 'triangle', color: '#e67e22', size: 'small', position: 'top-right' },
-        { action: 'draw', shape: 'circle', color: '#2c3e50', size: 'small', position: 'top-left' },
-        { action: 'draw', shape: 'circle', color: '#2c3e50', size: 'small', position: 'top-right' },
-        { action: 'draw', shape: 'heart', color: '#e91e63', size: 'small', position: 'center' },
-      ]
-    },
-    '小猫': { alias: '猫' },
-    '狗': {
-      reply: '为你画一只狗',
-      commands: [
-        { action: 'draw', shape: 'circle', color: '#795548', size: 'large', position: 'center' },
-        { action: 'draw', shape: 'circle', color: '#795548', size: 'medium', position: 'top-left' },
-        { action: 'draw', shape: 'circle', color: '#795548', size: 'medium', position: 'top-right' },
-        { action: 'draw', shape: 'circle', color: '#2c3e50', size: 'small', position: 'top-left' },
-        { action: 'draw', shape: 'circle', color: '#2c3e50', size: 'small', position: 'top-right' },
-        { action: 'draw', shape: 'circle', color: '#000000', size: 'small', position: 'center' },
-      ]
-    },
-    '小狗': { alias: '狗' },
-    '彩虹': {
-      reply: '为你画一道彩虹',
-      commands: [
-        { action: 'draw', shape: 'circle', color: '#e74c3c', size: 'xlarge', position: 'center' },
-        { action: 'draw', shape: 'circle', color: '#e67e22', size: 'large', position: 'center' },
-        { action: 'draw', shape: 'circle', color: '#f1c40f', size: 'medium', position: 'center' },
-        { action: 'draw', shape: 'circle', color: '#2ecc71', size: 'small', position: 'center' },
-      ]
-    },
-    '蛋糕': {
-      reply: '为你画一个蛋糕',
-      commands: [
-        { action: 'draw', shape: 'rect', color: '#e91e63', size: 'large', position: 'bottom' },
-        { action: 'draw', shape: 'rect', color: '#f1c40f', size: 'large', position: 'center' },
-        { action: 'draw', shape: 'circle', color: '#e74c3c', size: 'small', position: 'top-left' },
-        { action: 'draw', shape: 'circle', color: '#e74c3c', size: 'small', position: 'top' },
-        { action: 'draw', shape: 'circle', color: '#e74c3c', size: 'small', position: 'top-right' },
-      ]
-    },
-    '气球': {
-      reply: '为你画气球',
-      commands: [
-        { action: 'draw', shape: 'circle', color: '#e74c3c', size: 'large', position: 'top-left' },
-        { action: 'draw', shape: 'circle', color: '#3498db', size: 'large', position: 'top' },
-        { action: 'draw', shape: 'circle', color: '#f1c40f', size: 'large', position: 'top-right' },
-        { action: 'draw', shape: 'line', color: '#2c3e50', size: 'medium', position: 'top-left' },
-        { action: 'draw', shape: 'line', color: '#2c3e50', size: 'medium', position: 'top' },
-        { action: 'draw', shape: 'line', color: '#2c3e50', size: 'medium', position: 'top-right' },
-      ]
-    },
-    '爱心': {
-      reply: '为你画一颗爱心',
-      commands: [
-        { action: 'draw', shape: 'heart', color: '#e74c3c', size: 'xlarge', position: 'center' },
-      ]
-    },
-    '音乐': {
-      reply: '为你画音乐符号',
-      commands: [
-        { action: 'draw', shape: 'circle', color: '#2c3e50', size: 'medium', position: 'bottom-left' },
-        { action: 'draw', shape: 'circle', color: '#2c3e50', size: 'medium', position: 'bottom-right' },
-        { action: 'draw', shape: 'line', color: '#2c3e50', size: 'xlarge', position: 'top' },
-      ]
-    },
-    '机器人': {
-      reply: '为你画一个机器人',
-      commands: [
-        { action: 'draw', shape: 'rect', color: '#95a5a6', size: 'large', position: 'center' },
-        { action: 'draw', shape: 'rect', color: '#7f8c8d', size: 'medium', position: 'top' },
-        { action: 'draw', shape: 'circle', color: '#3498db', size: 'small', position: 'top-left' },
-        { action: 'draw', shape: 'circle', color: '#e74c3c', size: 'small', position: 'top-right' },
-        { action: 'draw', shape: 'rect', color: '#95a5a6', size: 'small', position: 'bottom-left' },
-        { action: 'draw', shape: 'rect', color: '#95a5a6', size: 'small', position: 'bottom-right' },
-      ]
-    },
-    '飞船': {
-      reply: '为你画一艘飞船',
-      commands: [
-        { action: 'draw', shape: 'diamond', color: '#95a5a6', size: 'xlarge', position: 'center' },
-        { action: 'draw', shape: 'circle', color: '#3498db', size: 'medium', position: 'center' },
-        { action: 'draw', shape: 'triangle', color: '#e74c3c', size: 'medium', position: 'bottom' },
-        { action: 'draw', shape: 'triangle', color: '#f39c12', size: 'small', position: 'bottom' },
-      ]
-    },
-    '摩天轮': {
-      reply: '为你画一个摩天轮',
-      commands: [
-        { action: 'draw', shape: 'circle', color: '#e74c3c', size: 'xlarge', position: 'center' },
-        { action: 'draw', shape: 'circle', color: '#3498db', size: 'small', position: 'top' },
-        { action: 'draw', shape: 'circle', color: '#f1c40f', size: 'small', position: 'top-right' },
-        { action: 'draw', shape: 'circle', color: '#2ecc71', size: 'small', position: 'right' },
-        { action: 'draw', shape: 'circle', color: '#9b59b6', size: 'small', position: 'bottom-right' },
-        { action: 'draw', shape: 'circle', color: '#e67e22', size: 'small', position: 'bottom' },
-        { action: 'draw', shape: 'circle', color: '#e91e63', size: 'small', position: 'bottom-left' },
-        { action: 'draw', shape: 'circle', color: '#00bcd4', size: 'small', position: 'left' },
-        { action: 'draw', shape: 'circle', color: '#ff5722', size: 'small', position: 'top-left' },
-        { action: 'draw', shape: 'rect', color: '#795548', size: 'large', position: 'bottom' },
-      ]
-    },
+  // Scene keywords → image generation prompts
+  static SCENE_PROMPTS = {
+    '日落': 'beautiful sunset over ocean, golden sky, orange clouds, silhouette of mountains, oil painting style',
+    '夕阳': 'beautiful sunset, golden hour, warm colors, dramatic clouds, landscape painting',
+    '海滩': 'tropical beach scene, white sand, turquoise water, palm trees, clear blue sky',
+    '沙滩': 'sandy beach, ocean waves, seashells, warm sunlight, peaceful scene',
+    '城堡': 'medieval castle on hilltop, stone towers, flags, dramatic sky, fantasy art',
+    '房子': 'cozy house with garden, chimney smoke, flowers, warm lighting, illustration',
+    '花园': 'beautiful flower garden, colorful flowers, butterflies, green grass, sunny day',
+    '星空': 'starry night sky, milky way, glowing stars, deep blue and purple, magical',
+    '夜空': 'night sky full of stars, moon, aurora borealis, dreamy atmosphere',
+    '山水': 'Chinese ink wash painting, mountains and water, misty landscape, traditional art',
+    '雪人': 'cute snowman in winter snow, carrot nose, scarf, top hat, snowflakes falling',
+    '太阳': 'bright sun in blue sky, warm rays, clouds, cheerful atmosphere',
+    '树': 'beautiful tree with green leaves, strong trunk, flowers blooming, nature art',
+    '猫': 'cute cat, fluffy fur, big eyes, sitting peacefully, adorable, digital art',
+    '小猫': 'adorable kitten, playful pose, soft fur, cute expression, digital art',
+    '狗': 'cute dog, happy expression, wagging tail, warm colors, digital art',
+    '小狗': 'adorable puppy, playful, big eyes, fluffy, digital art',
+    '彩虹': 'beautiful rainbow after rain, colorful arc in sky, clouds, sunny, magical',
+    '蛋糕': 'beautiful birthday cake, candles, frosting, sprinkles, celebration',
+    '气球': 'colorful balloons floating in sky, festive atmosphere, bright colors',
+    '爱心': 'red heart shape, romantic, glowing, sparkles, love theme, digital art',
+    '音乐': 'music notes floating, guitar, musical atmosphere, colorful, artistic',
+    '机器人': 'cute robot, metallic body, glowing eyes, futuristic style, digital art',
+    '飞船': 'spaceship in outer space, stars, planets, sci-fi style, detailed illustration',
+    '摩天轮': 'colorful ferris wheel at night, lights, amusement park, festive',
+    '花': 'beautiful flowers bouquet, roses, tulips, colorful petals, watercolor style',
+    '蝴蝶': 'beautiful butterfly, colorful wings, flowers, nature, detailed illustration',
+    '龙': 'Chinese dragon, red and gold, flying through clouds, traditional art style',
+    '凤凰': 'phoenix rising, fire feathers, golden and red, mythical bird, dramatic',
+    '熊猫': 'cute panda eating bamboo, black and white, adorable, digital art',
+    '美人鱼': 'mermaid under the sea, flowing hair, coral reef, fish, magical underwater',
+    '森林': 'enchanted forest, tall trees, sunlight through leaves, magical atmosphere',
+    '海洋': 'deep ocean scene, blue water, fish, coral reef, underwater world',
+    '月亮': 'full moon in night sky, craters visible, stars around, peaceful moonlight',
+    '向日葵': 'field of sunflowers, bright yellow petals, blue sky, sunny day, impressionist',
+    '樱花': 'cherry blossom trees, pink petals falling, spring scene, Japanese style',
+    '雪山': 'snowy mountain peak, clear sky, pine trees, winter landscape, majestic',
+    '城市': 'city skyline at night, lights, buildings, modern cityscape, digital art',
+    '宇宙': 'outer space, planets, nebula, stars, galaxy, cosmic scene, digital art',
   };
 
   // Color modifiers
@@ -423,48 +322,34 @@ class AgentEngine {
     const modResult = this._checkModification(text);
     if (modResult) return modResult;
 
-    // Find matching scene
+    // Find matching scene (returns image generation command)
     const sceneResult = this._findScene(text);
     if (sceneResult) {
-      // Apply color modifiers from text
-      const colorMod = this._extractColor(text);
-      if (colorMod) {
-        sceneResult.commands = sceneResult.commands.map(cmd => ({
-          ...cmd,
-          color: this._pickColor(cmd.color, colorMod, text)
-        }));
-      }
-      this.lastCommands = [...sceneResult.commands];
       return sceneResult;
     }
 
-    // Try to generate from keywords
-    const generated = this._generateFromKeywords(text);
-    if (generated) {
-      this.lastCommands = [...generated.commands];
-      return generated;
-    }
+    // Fallback: generate AI image from the description
+    return {
+      reply: `为你生成"${text}"的图片`,
+      commands: [{ action: 'image', prompt: text }],
+      needConfirm: false,
+    };
 
     return null;
   }
 
   _findScene(text) {
     // Sort by keyword length descending for better matching
-    const entries = Object.entries(AgentEngine.SCENES)
-      .filter(([k, v]) => !v.alias)
+    const entries = Object.entries(AgentEngine.SCENE_PROMPTS)
       .sort((a, b) => b[0].length - a[0].length);
 
-    for (const [keyword, scene] of entries) {
+    for (const [keyword, prompt] of entries) {
       if (text.includes(keyword)) {
-        // Resolve alias
-        const resolved = scene.alias ? AgentEngine.SCENES[scene.alias] : scene;
-        if (resolved) {
-          return {
-            reply: resolved.reply,
-            commands: JSON.parse(JSON.stringify(resolved.commands)),
-            needConfirm: false,
-          };
-        }
+        return {
+          reply: `为你生成"${keyword}"的图片`,
+          commands: [{ action: 'image', prompt: text }],
+          needConfirm: false,
+        };
       }
     }
     return null;
@@ -525,39 +410,6 @@ class AgentEngine {
     return null;
   }
 
-  _generateFromKeywords(text) {
-    // Try to build a scene from individual keywords
-    const shapes = [];
-    const shapeMap = {
-      '圆': 'circle', '方块': 'rect', '方形': 'rect', '矩形': 'rect',
-      '三角': 'triangle', '星星': 'star', '五角星': 'star',
-      '爱心': 'heart', '心': 'heart', '箭头': 'arrow',
-      '菱形': 'diamond', '波浪': 'wavy', '螺旋': 'spiral',
-    };
-
-    for (const [keyword, shape] of Object.entries(shapeMap)) {
-      if (text.includes(keyword)) shapes.push(shape);
-    }
-
-    if (shapes.length === 0) return null;
-
-    const color = this._extractColor(text) || 'blue';
-    const positions = ['center', 'top-left', 'top-right', 'bottom-left', 'bottom-right', 'left', 'right', 'top', 'bottom'];
-
-    const commands = shapes.map((shape, i) => ({
-      action: 'draw',
-      shape,
-      color,
-      size: i === 0 ? 'large' : 'medium',
-      position: positions[i % positions.length],
-    }));
-
-    return {
-      reply: `为你画${shapes.length}个图形`,
-      commands,
-      needConfirm: false,
-    };
-  }
 }
 
 // ===== Command Parser =====
@@ -765,7 +617,7 @@ class CommandParser {
 class DrawingEngine {
   constructor(canvas) {
     this.canvas = canvas;
-    this.ctx = canvas.getContext('2d');
+    this.ctx = canvas.getContext('2d', { willReadFrequently: true });
     this.undoStack = [];
     this.redoStack = [];
     this.currentColor = CONFIG.defaultColor;
@@ -782,32 +634,68 @@ class DrawingEngine {
     const w = window.innerWidth;
     const h = window.innerHeight;
 
-    // Save current content
-    let imageData = null;
-    if (this.canvas.width > 0 && this.canvas.height > 0) {
-      try { imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height); } catch(e) {}
-    }
-
     this.canvas.width = w * dpr;
     this.canvas.height = h * dpr;
     this.canvas.style.width = w + 'px';
     this.canvas.style.height = h + 'px';
     this.ctx.scale(dpr, dpr);
 
-    // Restore content
-    if (imageData) {
-      this.ctx.putImageData(imageData, 0, 0);
-    } else {
-      this._clearCanvas();
-    }
-
     this.width = w;
     this.height = h;
+
+    // Always draw frame (content will be redrawn by caller if needed)
+    this._clearCanvas();
   }
 
   _clearCanvas() {
-    this.ctx.fillStyle = CONFIG.canvasBg;
-    this.ctx.fillRect(0, 0, this.width, this.height);
+    const ctx = this.ctx;
+    const w = this.width;
+    const h = this.height;
+    const radius = 20;
+    const margin = Math.min(w, h) * 0.05;
+    const frameX = margin;
+    const frameY = margin;
+    const frameW = w - margin * 2;
+    const frameH = h - margin * 2;
+
+    // Clear entire canvas with theme background
+    ctx.fillStyle = '#f5f5f7';
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.save();
+
+    // Draw shadow
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
+    ctx.shadowBlur = 20;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 4;
+
+    // Draw rounded rect with white background
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.moveTo(frameX + radius, frameY);
+    ctx.lineTo(frameX + frameW - radius, frameY);
+    ctx.arcTo(frameX + frameW, frameY, frameX + frameW, frameY + radius, radius);
+    ctx.lineTo(frameX + frameW, frameY + frameH - radius);
+    ctx.arcTo(frameX + frameW, frameY + frameH, frameX + frameW - radius, frameY + frameH, radius);
+    ctx.lineTo(frameX + radius, frameY + frameH);
+    ctx.arcTo(frameX, frameY + frameH, frameX, frameY + frameH - radius, radius);
+    ctx.lineTo(frameX, frameY + radius);
+    ctx.arcTo(frameX, frameY, frameX + radius, frameY, radius);
+    ctx.closePath();
+    ctx.fill();
+
+    // Draw subtle border
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.08)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.restore();
+
+    // Store frame dimensions for drawing operations
+    this._frame = { x: frameX, y: frameY, w: frameW, h: frameH, radius };
   }
 
   _saveState() {
@@ -821,17 +709,33 @@ class DrawingEngine {
   }
 
   _getPositionCoords(pos) {
+    // Use frame boundaries if available
+    const f = this._frame;
     const margin = 0.15;
+    let x, y, w, h;
+
+    if (f) {
+      x = f.x;
+      y = f.y;
+      w = f.w;
+      h = f.h;
+    } else {
+      x = 0;
+      y = 0;
+      w = this.width;
+      h = this.height;
+    }
+
     const positions = {
-      'top-left':     { x: this.width * margin,       y: this.height * margin },
-      'top':          { x: this.width / 2,            y: this.height * margin },
-      'top-right':    { x: this.width * (1 - margin), y: this.height * margin },
-      'left':         { x: this.width * margin,       y: this.height / 2 },
-      'center':       { x: this.width / 2,            y: this.height / 2 },
-      'right':        { x: this.width * (1 - margin), y: this.height / 2 },
-      'bottom-left':  { x: this.width * margin,       y: this.height * (1 - margin) },
-      'bottom':       { x: this.width / 2,            y: this.height * (1 - margin) },
-      'bottom-right': { x: this.width * (1 - margin), y: this.height * (1 - margin) },
+      'top-left':     { x: x + w * margin,       y: y + h * margin },
+      'top':          { x: x + w / 2,            y: y + h * margin },
+      'top-right':    { x: x + w * (1 - margin), y: y + h * margin },
+      'left':         { x: x + w * margin,       y: y + h / 2 },
+      'center':       { x: x + w / 2,            y: y + h / 2 },
+      'right':        { x: x + w * (1 - margin), y: y + h / 2 },
+      'bottom-left':  { x: x + w * margin,       y: y + h * (1 - margin) },
+      'bottom':       { x: x + w / 2,            y: y + h * (1 - margin) },
+      'bottom-right': { x: x + w * (1 - margin), y: y + h * (1 - margin) },
     };
     return positions[pos] || positions['center'];
   }
@@ -1223,6 +1127,7 @@ class UIManager {
       permMessage: document.getElementById('perm-message'),
       permRetryBtn: document.getElementById('perm-retry-btn'),
       permCancelBtn: document.getElementById('perm-cancel-btn'),
+      generatingOverlay: document.getElementById('generating-overlay'),
     };
   }
 
@@ -1244,7 +1149,10 @@ class UIManager {
     const bar = this.elements.voiceBar;
     bar.classList.toggle('listening', isListening);
     bar.classList.toggle('muted', false);
-    this.elements.voiceStatus.textContent = isListening ? '正在聆听...' : '已暂停';
+    // Only update status text if not in sleeping/awake mode
+    if (!bar.classList.contains('sleeping') && !bar.classList.contains('awake')) {
+      this.elements.voiceStatus.textContent = isListening ? '正在聆听...' : '已暂停';
+    }
   }
 
   setMuted(isMuted) {
@@ -1327,6 +1235,7 @@ class App {
     this.speech = new SpeechManager();
     this.parser = new CommandParser();
     this.agent = new AgentEngine();
+    this.imageGenerator = new ImageGenerator();
     this.engine = null;
     this.ui = new UIManager();
     this.ttsEnabled = true;
@@ -1335,9 +1244,9 @@ class App {
 
     // Wake word state
     this.isAwake = false;
-    this.wakeWord = '小溪小溪';
+    this.wakeWord = '你好';
     this.wakeTimeout = null;
-    this.wakeDuration = 8000; // 8 seconds idle → back to sleep
+    this.wakeDuration = 15000; // 15 seconds idle → back to sleep
   }
 
   init() {
@@ -1358,6 +1267,18 @@ class App {
     this.ui.elements.clearHistory.addEventListener('click', () => {
       this.ui.clearHistory();
     });
+
+    // Setup history minimize
+    const minimizeBtn = document.getElementById('minimize-history');
+    const historyPanel = this.ui.elements.historyPanel;
+    minimizeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      historyPanel.classList.toggle('minimized');
+      minimizeBtn.textContent = historyPanel.classList.contains('minimized') ? '□' : '─';
+    });
+
+    // Setup history panel dragging
+    this._setupDraggable(historyPanel, document.getElementById('history-drag-handle'));
 
     // Setup permission dialog buttons
     this.ui.elements.permRetryBtn.addEventListener('click', () => {
@@ -1421,7 +1342,7 @@ class App {
 
     // Speak welcome message
     setTimeout(() => {
-      this.speak('欢迎使用语音绘图工具，说小溪小溪唤醒我');
+      this.speak('欢迎使用语音绘图工具，说你好唤醒我');
     }, 500);
   }
 
@@ -1439,13 +1360,15 @@ class App {
       // --- Wake word logic ---
       if (!this.isAwake) {
         // Sleeping: listen for wake word
-        if (text.includes('小溪')) {
-          // Check if it's an agent command: "小溪画XXX"
-          const agentMatch = text.match(/小溪画(.+)/);
-          if (agentMatch) {
+        if (text.includes('你好')) {
+          // Check if there's content after "你好"
+          const afterWake = text.replace(/.*你好/, '').trim();
+          if (afterWake.length > 0) {
+            // "你好画一个猫" → wake up and process "画一个猫"
             this._setAwakeState(true);
-            this._handleAgentCommand(agentMatch[1].trim());
+            this._processCommand(afterWake);
           } else {
+            // Just "你好" → wake up
             this._setAwakeState(true);
             this.speak('我在');
           }
@@ -1457,33 +1380,8 @@ class App {
         return;
       }
 
-      // --- Check for agent command while awake: "小溪画XXX" ---
-      const agentMatch = text.match(/小溪画(.+)/);
-      if (agentMatch) {
-        this._handleAgentCommand(agentMatch[1].trim());
-        this._resetWakeTimer();
-        setTimeout(() => this.ui.updateTranscript('', false), 2000);
-        return;
-      }
-
-      // --- Also try agent for modification keywords (大一点, 换成红色, etc.) ---
-      const modKeywords = ['大一点', '小一点', '放大', '缩小', '换成', '移到', '变大', '变小'];
-      const isMod = modKeywords.some(kw => text.includes(kw));
-      if (isMod && this.agent.lastCommands.length > 0) {
-        this._handleAgentCommand(text);
-        this._resetWakeTimer();
-        setTimeout(() => this.ui.updateTranscript('', false), 2000);
-        return;
-      }
-
-      // --- Normal command parsing ---
-      const commands = this.parser.parse(text);
-      if (commands && commands.length > 0) {
-        this._executeCommands(commands, text);
-      } else {
-        this.ui.addHistoryItem(text, { success: false, message: '未识别到有效指令' });
-        this.ui.showToast('未理解指令，请重试', 'error');
-      }
+      // --- Awake: process command directly ---
+      this._processCommand(text);
 
       // Reset wake timer after each command attempt
       this._resetWakeTimer();
@@ -1493,6 +1391,59 @@ class App {
         this.ui.updateTranscript('', false);
       }, 2000);
     }
+  }
+
+  _processCommand(text) {
+    // 1. Check for modification keywords
+    const modKeywords = ['大一点', '小一点', '放大', '缩小', '换成', '移到', '变大', '变小'];
+    const isMod = modKeywords.some(kw => text.includes(kw));
+    if (isMod && this.agent.lastCommands.length > 0) {
+      this._handleAgentCommand(text);
+      return;
+    }
+
+    // 2. Try local command parsing first
+    const commands = this.parser.parse(text);
+    if (commands && commands.length > 0) {
+      this._executeCommands(commands, text);
+      return;
+    }
+
+    // 3. No local match → use AI image generation
+    this._handleAgentCommand(text);
+  }
+
+  _setupDraggable(element, handle) {
+    let isDragging = false;
+    let startX, startY, startLeft, startTop;
+
+    handle.addEventListener('mousedown', (e) => {
+      if (e.target.tagName === 'BUTTON') return; // Don't drag when clicking buttons
+      isDragging = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      const rect = element.getBoundingClientRect();
+      startLeft = rect.left;
+      startTop = rect.top;
+      element.style.transition = 'none'; // Disable transition during drag
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      element.style.left = (startLeft + dx) + 'px';
+      element.style.top = (startTop + dy) + 'px';
+      element.style.right = 'auto';
+      element.style.bottom = 'auto';
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (isDragging) {
+        isDragging = false;
+        element.style.transition = ''; // Re-enable transition
+      }
+    });
   }
 
   _handleAgentCommand(text, mode) {
@@ -1510,8 +1461,13 @@ class App {
 
       // Execute commands if any
       if (result.commands && result.commands.length > 0) {
-        this.ui.showToast(`🎨 Agent 生成了 ${result.commands.length} 个绘图指令`, 'success');
-        this._executeAgentCommands(result.commands);
+        // Check if it's an image generation command
+        if (result.commands[0].action === 'image') {
+          this._executeImageGeneration(result.commands[0].prompt || text);
+        } else {
+          this.ui.showToast(`🎨 Agent 生成了 ${result.commands.length} 个绘图指令`, 'success');
+          this._executeAgentCommands(result.commands);
+        }
       }
     } else {
       // Agent couldn't understand
@@ -1520,7 +1476,125 @@ class App {
     }
   }
 
+  async _executeImageGeneration(prompt) {
+    this._clearWakeTimer();
+
+    // Show loading overlay
+    const overlay = document.getElementById('generating-overlay');
+    overlay.classList.remove('hidden');
+
+    this.ui.showToast('🎨 正在生成图片，请稍候...', 'info');
+    this.ui.addHistoryItem(`[AI绘图]`, { success: true, message: `正在生成: ${prompt}` });
+
+    const maxRetries = 2;
+    let lastError = null;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        if (attempt > 0) {
+          this.ui.showToast(`🔄 重试中... (${attempt}/${maxRetries})`, 'info');
+          await new Promise(r => setTimeout(r, 2000)); // Wait 2 seconds before retry
+        }
+
+        const imageUrl = await this.imageGenerator.generate(prompt);
+        await this._drawImageOnCanvas(imageUrl);
+        this.ui.showSuccess('🎉 图片生成完成');
+        this.speak('图片生成完成');
+        this.ui.addHistoryItem(`[AI绘图]`, { success: true, message: '图片已绘制到画布' });
+        overlay.classList.add('hidden');
+        this._resetWakeTimer();
+        return; // Success, exit
+      } catch (err) {
+        lastError = err;
+        console.warn(`Image generation attempt ${attempt + 1} failed:`, err.message);
+      }
+    }
+
+    // All attempts failed
+    overlay.classList.add('hidden');
+    const errorMsg = lastError?.message || '未知错误';
+    this.ui.showError('图片生成失败: ' + errorMsg);
+    this.speak('图片生成失败，请稍后再试');
+    this.ui.addHistoryItem(`[AI绘图]`, { success: false, message: errorMsg });
+
+    this._resetWakeTimer();
+  }
+
+  _drawImageOnCanvas(imageUrl) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        // Save current state
+        this.engine._saveState();
+
+        // Use frame boundaries
+        const f = this.engine._frame;
+        const ctx = this.engine.ctx;
+
+        let frameX, frameY, frameW, frameH;
+        if (f) {
+          frameX = f.x;
+          frameY = f.y;
+          frameW = f.w;
+          frameH = f.h;
+        } else {
+          frameX = 0;
+          frameY = 0;
+          frameW = this.engine.width;
+          frameH = this.engine.height;
+        }
+
+        // Calculate image size to fit in frame
+        const imgRatio = img.width / img.height;
+        const frameRatio = frameW / frameH;
+        let drawW, drawH;
+
+        if (imgRatio > frameRatio) {
+          drawW = frameW;
+          drawH = drawW / imgRatio;
+        } else {
+          drawH = frameH;
+          drawW = drawH * imgRatio;
+        }
+
+        const drawX = frameX + (frameW - drawW) / 2;
+        const drawY = frameY + (frameH - drawH) / 2;
+
+        // Clear the frame area with white background
+        ctx.save();
+        const radius = f ? f.radius : 20;
+
+        // Create rounded rect path for frame
+        ctx.beginPath();
+        ctx.moveTo(frameX + radius, frameY);
+        ctx.lineTo(frameX + frameW - radius, frameY);
+        ctx.arcTo(frameX + frameW, frameY, frameX + frameW, frameY + radius, radius);
+        ctx.lineTo(frameX + frameW, frameY + frameH - radius);
+        ctx.arcTo(frameX + frameW, frameY + frameH, frameX + frameW - radius, frameY + frameH, radius);
+        ctx.lineTo(frameX + radius, frameY + frameH);
+        ctx.arcTo(frameX, frameY + frameH, frameX, frameY + frameH - radius, radius);
+        ctx.lineTo(frameX, frameY + radius);
+        ctx.arcTo(frameX, frameY, frameX + radius, frameY, radius);
+        ctx.closePath();
+
+        // Clip to frame and draw image
+        ctx.clip();
+        ctx.fillStyle = CONFIG.canvasBg;
+        ctx.fill();
+        ctx.drawImage(img, drawX, drawY, drawW, drawH);
+        ctx.restore();
+
+        URL.revokeObjectURL(imageUrl);
+        resolve();
+      };
+      img.onerror = () => reject(new Error('图片加载失败'));
+      img.src = imageUrl;
+    });
+  }
+
   _executeAgentCommands(commands) {
+    this._clearWakeTimer(); // Don't start timer while drawing
     let delay = 0;
     commands.forEach((cmd, i) => {
       setTimeout(() => {
@@ -1531,6 +1605,8 @@ class App {
         if (i === commands.length - 1) {
           this.ui.showSuccess('🎉 绘图完成');
           this.speak('绘图完成');
+          // Reset timer AFTER all drawing is done
+          this._resetWakeTimer();
         }
       }, delay);
       delay += 500;
@@ -1547,7 +1623,7 @@ class App {
       this.ui.elements.voiceStatus.textContent = '🎤 请说出指令...';
       this._resetWakeTimer();
     } else {
-      this.ui.elements.voiceStatus.textContent = '💤 说"小溪小溪"唤醒我';
+      this.ui.elements.voiceStatus.textContent = '💤 说"你好"唤醒我';
       this._clearWakeTimer();
     }
   }
@@ -1613,10 +1689,20 @@ class App {
   _speakNext() {
     if (this._ttsQueue.length === 0) {
       this._isSpeaking = false;
+      // Resume speech recognition after TTS finishes
+      if (this.speech && !this.speech.isMuted) {
+        setTimeout(() => this.speech.start(), 200);
+      }
       return;
     }
 
     this._isSpeaking = true;
+
+    // Pause speech recognition during TTS to avoid echo
+    if (this.speech && this.speech.isListening) {
+      this.speech.stop();
+    }
+
     const text = this._ttsQueue.shift();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = 'zh-CN';

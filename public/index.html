@@ -81,9 +81,12 @@
 
     <!-- Command history panel (left side) -->
     <div id="history-panel">
-      <div class="panel-header">
+      <div class="panel-header" id="history-drag-handle">
         <span>&#128220; 命令历史</span>
-        <button id="clear-history" title="清空历史">&#10005;</button>
+        <div class="panel-controls">
+          <button id="minimize-history" title="最小化">&#9472;</button>
+          <button id="clear-history" title="清空历史">&#10005;</button>
+        </div>
       </div>
       <div id="history-list"></div>
     </div>
@@ -109,15 +112,14 @@
       <div class="help-content">
         <div class="help-section">
           <h4>唤醒</h4>
-          <p>说 <strong>"小溪小溪"</strong> 唤醒工具，然后说出绘图指令</p>
+          <p>说 <strong>"你好"</strong> 唤醒工具，然后说出绘图指令</p>
           <p>8秒无操作自动回到待机状态</p>
         </div>
         <div class="help-section">
-          <h4>🤖 Agent 自主绘图</h4>
-          <p>说 <strong>"小溪画"</strong> + 描述，AI 自动拆解并绘图</p>
-          <p>例如："小溪画一幅日落海滩"、"小溪画一个卡通城堡"</p>
-          <p>Agent 会追问细节，回答后自动绘图</p>
-          <p>说 "退出" 或 "结束对话" 可提前结束对话</p>
+          <h4>🤖 AI 智能绘图</h4>
+          <p>唤醒后直接描述，AI 自动生成图片</p>
+          <p>例如："一幅日落海滩"、"一只可爱的猫咪"</p>
+          <p>如果描述不匹配本地指令，自动调用 AI 生成</p>
         </div>
         <div class="help-section">
           <h4>基本绘图</h4>
@@ -156,7 +158,13 @@
 
     <!-- Welcome hint -->
     <div id="welcome-hint" class="fade-out-slow">
-      说 &ldquo;小溪小溪&rdquo; 唤醒我，或说 &ldquo;小溪画一幅日落&rdquo; 让 AI 自主绘图
+      说 &ldquo;你好&rdquo; 唤醒，然后直接描述你想画的内容
+    </div>
+
+    <!-- AI Image Generation Loading Overlay -->
+    <div id="generating-overlay" class="generating-overlay hidden">
+      <div class="generating-spinner"></div>
+      <div class="generating-text">🎨 AI 正在生成图片...</div>
     </div>
   </div>
 
