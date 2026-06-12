@@ -1,0 +1,11 @@
+{
+  "name": "voice-drawing-tool",
+  "version": "1.0.0",
+  "description": "纯语音控制绘图工具 - Voice-controlled drawing tool",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": ["voice", "drawing", "speech-recognition", "canvas"],
+  "license": "MIT"
+}

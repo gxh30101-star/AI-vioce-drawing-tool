@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>语音绘图工具</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Start overlay - required for browser gesture policy -->
+  <div id="start-overlay">
+    <div class="start-content">
+      <div class="start-icon">&#127912;</div>
+      <h1>语音绘图工具</h1>
+      <p class="subtitle">纯语音控制，解放双手，用声音创造</p>
+      <button id="start-btn">
+        <span class="mic-glyph">&#127908;</span>
+        点击开始语音绘图
+      </button>
+      <p class="hint">首次使用需要授权麦克风权限</p>
+    </div>
+  </div>
+
+  <!-- Permission request overlay -->
+  <div id="permission-overlay" class="hidden">
+    <div class="permission-dialog">
+      <div class="perm-icon">&#127908;</div>
+      <h2>需要麦克风权限</h2>
+      <p id="perm-message">语音绘图需要使用麦克风来听取您的指令。</p>
+      <div class="perm-hint">
+        <p><strong>如何开启权限：</strong></p>
+        <ol>
+          <li>点击浏览器地址栏左侧的 <span class="perm-badge">&#128274;</span> 图标</li>
+          <li>找到「麦克风」选项，设置为「允许」</li>
+          <li>点击下方「重试」按钮</li>
+        </ol>
+      </div>
+      <div class="perm-actions">
+        <button id="perm-retry-btn" class="perm-btn primary">重新授权</button>
+        <button id="perm-cancel-btn" class="perm-btn secondary">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main application -->
+  <div id="app" class="hidden">
+    <canvas id="drawing-canvas"></canvas>
+
+    <!-- Toast notifications -->
+    <div id="toast-container"></div>
+
+    <!-- Top bar: settings display -->
+    <div id="top-bar">
+      <div id="settings-panel">
+        <div class="setting-item">
+          <span class="setting-label">颜色</span>
+          <span id="current-color-dot" class="color-dot"></span>
+          <span id="current-color-name">黑色</span>
+        </div>
+        <div class="setting-divider"></div>
+        <div class="setting-item">
+          <span class="setting-label">大小</span>
+          <span id="current-size-name">中等</span>
+        </div>
+        <div class="setting-divider"></div>
+        <div class="setting-item">
+          <span class="setting-label">工具</span>
+          <span id="current-shape-name">圆形</span>
+        </div>
+      </div>
+      <div id="voice-controls">
+        <button id="mic-toggle" title="开关麦克风">
+          <span id="mic-icon">&#127908;</span>
+        </button>
+        <button id="help-toggle" title="语音指令参考">
+          <span>?</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Command history panel (left side) -->
+    <div id="history-panel">
+      <div class="panel-header">
+        <span>&#128220; 命令历史</span>
+        <button id="clear-history" title="清空历史">&#10005;</button>
+      </div>
+      <div id="history-list"></div>
+    </div>
+
+    <!-- Voice bar (bottom) -->
+    <div id="voice-bar">
+      <div id="voice-indicator">
+        <div class="pulse-ring"></div>
+        <span class="mic-small">&#127908;</span>
+      </div>
+      <div id="transcript-area">
+        <div id="voice-status-text">正在聆听...</div>
+        <div id="transcript"></div>
+      </div>
+    </div>
+
+    <!-- Help panel (slide-in) -->
+    <div id="help-panel" class="hidden">
+      <div class="panel-header">
+        <span>&#128161; 语音指令参考</span>
+        <button id="close-help" title="关闭">&#10005;</button>
+      </div>
+      <div class="help-content">
+        <div class="help-section">
+          <h4>基本绘图</h4>
+          <p>"画一个圆" / "画个方块" / "画三角形" / "画直线" / "画五角星" / "画爱心" / "画箭头"</p>
+        </div>
+        <div class="help-section">
+          <h4>指定颜色</h4>
+          <p>"用红色画一个圆" / "画个蓝色的方块" / "绿色三角"</p>
+        </div>
+        <div class="help-section">
+          <h4>指定大小</h4>
+          <p>"画一个大圆" / "小方块" / "画个超大五角星"</p>
+        </div>
+        <div class="help-section">
+          <h4>指定位置</h4>
+          <p>"在中间画个圆" / "左上角画个三角" / "右边画条线"</p>
+        </div>
+        <div class="help-section">
+          <h4>复合指令</h4>
+          <p>"用红色画一个大圆在中间" / "画一个蓝方块然后画一个红圆"</p>
+        </div>
+        <div class="help-section">
+          <h4>修改设置</h4>
+          <p>"红色" / "大一点" / "小一点" / "换成画方块"</p>
+        </div>
+        <div class="help-section">
+          <h4>操作控制</h4>
+          <p>"撤销" / "重做" / "清除" / "清空画布"</p>
+        </div>
+        <div class="help-section">
+          <h4>特殊画法</h4>
+          <p>"画波浪线" / "画虚线" / "画螺旋" / "写文字你好"</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Welcome hint -->
+    <div id="welcome-hint" class="fade-out-slow">
+      试试说：&ldquo;用红色画一个大圆在中间&rdquo;
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
