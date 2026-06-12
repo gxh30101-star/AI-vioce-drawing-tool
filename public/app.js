@@ -179,6 +179,387 @@ class SpeechManager {
   }
 }
 
+// ===== Agent Engine (Local Intelligent Parser) =====
+class AgentEngine {
+  constructor() {
+    this.lastCommands = []; // for modification support
+    this.conversationContext = null; // pending scene info
+  }
+
+  // Scene templates: keywords → drawing command sequences
+  static SCENES = {
+    '日落': {
+      reply: '为你画一幅日落美景',
+      commands: [
+        { action: 'draw', shape: 'rect', color: '#f39c12', size: 'xlarge', position: 'bottom' },
+        { action: 'draw', shape: 'circle', color: '#e74c3c', size: 'large', position: 'center' },
+        { action: 'draw', shape: 'circle', color: '#f1c40f', size: 'medium', position: 'center' },
+        { action: 'draw', shape: 'wavy', color: '#3498db', size: 'xlarge', position: 'bottom-left' },
+        { action: 'draw', shape: 'wavy', color: '#2980b9', size: 'large', position: 'bottom-right' },
+      ]
+    },
+    '夕阳': { alias: '日落' },
+    '海滩': {
+      reply: '为你画一片海滩风景',
+      commands: [
+        { action: 'draw', shape: 'rect', color: '#f1c40f', size: 'xlarge', position: 'bottom' },
+        { action: 'draw', shape: 'wavy', color: '#3498db', size: 'xlarge', position: 'center' },
+        { action: 'draw', shape: 'circle', color: '#f39c12', size: 'large', position: 'top-right' },
+        { action: 'draw', shape: 'wavy', color: '#2980b9', size: 'large', position: 'bottom' },
+        { action: 'draw', shape: 'triangle', color: '#27ae60', size: 'medium', position: 'top-left' },
+      ]
+    },
+    '沙滩': { alias: '海滩' },
+    '城堡': {
+      reply: '为你画一座城堡',
+      commands: [
+        { action: 'draw', shape: 'rect', color: '#95a5a6', size: 'large', position: 'center' },
+        { action: 'draw', shape: 'rect', color: '#7f8c8d', size: 'medium', position: 'top-left' },
+        { action: 'draw', shape: 'rect', color: '#7f8c8d', size: 'medium', position: 'top-right' },
+        { action: 'draw', shape: 'triangle', color: '#e74c3c', size: 'medium', position: 'top-left' },
+        { action: 'draw', shape: 'triangle', color: '#e74c3c', size: 'medium', position: 'top-right' },
+        { action: 'draw', shape: 'rect', color: '#6c3483', size: 'small', position: 'center' },
+        { action: 'draw', shape: 'rect', color: '#2c3e50', size: 'small', position: 'bottom' },
+      ]
+    },
+    '房子': {
+      reply: '为你画一座房子',
+      commands: [
+        { action: 'draw', shape: 'rect', color: '#e67e22', size: 'large', position: 'center' },
+        { action: 'draw', shape: 'triangle', color: '#c0392b', size: 'large', position: 'top' },
+        { action: 'draw', shape: 'rect', color: '#8b4513', size: 'small', position: 'bottom' },
+        { action: 'draw', shape: 'rect', color: '#3498db', size: 'small', position: 'top-left' },
+        { action: 'draw', shape: 'rect', color: '#3498db', size: 'small', position: 'top-right' },
+      ]
+    },
+    '花园': {
+      reply: '为你画一座花园',
+      commands: [
+        { action: 'draw', shape: 'rect', color: '#27ae60', size: 'xlarge', position: 'bottom' },
+        { action: 'draw', shape: 'circle', color: '#e91e63', size: 'medium', position: 'bottom-left' },
+        { action: 'draw', shape: 'circle', color: '#f1c40f', size: 'medium', position: 'bottom' },
+        { action: 'draw', shape: 'circle', color: '#9b59b6', size: 'medium', position: 'bottom-right' },
+        { action: 'draw', shape: 'circle', color: '#e74c3c', size: 'small', position: 'left' },
+        { action: 'draw', shape: 'circle', color: '#3498db', size: 'small', position: 'right' },
+        { action: 'draw', shape: 'circle', color: '#f39c12', size: 'xlarge', position: 'top-right' },
+      ]
+    },
+    '星空': {
+      reply: '为你画一片星空',
+      commands: [
+        { action: 'draw', shape: 'rect', color: '#0f0f2a', size: 'xlarge', position: 'center' },
+        { action: 'draw', shape: 'star', color: '#f1c40f', size: 'small', position: 'top-left' },
+        { action: 'draw', shape: 'star', color: '#ffffff', size: 'small', position: 'top' },
+        { action: 'draw', shape: 'star', color: '#f1c40f', size: 'medium', position: 'top-right' },
+        { action: 'draw', shape: 'star', color: '#ffffff', size: 'small', position: 'left' },
+        { action: 'draw', shape: 'star', color: '#f1c40f', size: 'small', position: 'right' },
+        { action: 'draw', shape: 'circle', color: '#ecf0f1', size: 'large', position: 'top' },
+      ]
+    },
+    '夜空': { alias: '星空' },
+    '山水': {
+      reply: '为你画一幅山水画',
+      commands: [
+        { action: 'draw', shape: 'rect', color: '#ecf0f1', size: 'xlarge', position: 'bottom' },
+        { action: 'draw', shape: 'triangle', color: '#27ae60', size: 'xlarge', position: 'bottom-left' },
+        { action: 'draw', shape: 'triangle', color: '#2ecc71', size: 'large', position: 'bottom-right' },
+        { action: 'draw', shape: 'wavy', color: '#3498db', size: 'large', position: 'bottom' },
+        { action: 'draw', shape: 'circle', color: '#f1c40f', size: 'medium', position: 'top-right' },
+      ]
+    },
+    '雪人': {
+      reply: '为你画一个雪人',
+      commands: [
+        { action: 'draw', shape: 'circle', color: '#ecf0f1', size: 'xlarge', position: 'bottom' },
+        { action: 'draw', shape: 'circle', color: '#ecf0f1', size: 'large', position: 'center' },
+        { action: 'draw', shape: 'circle', color: '#ecf0f1', size: 'medium', position: 'top' },
+        { action: 'draw', shape: 'circle', color: '#2c3e50', size: 'small', position: 'top-left' },
+        { action: 'draw', shape: 'circle', color: '#2c3e50', size: 'small', position: 'top-right' },
+        { action: 'draw', shape: 'triangle', color: '#e67e22', size: 'small', position: 'center' },
+      ]
+    },
+    '太阳': {
+      reply: '为你画一个太阳',
+      commands: [
+        { action: 'draw', shape: 'circle', color: '#f1c40f', size: 'xlarge', position: 'center' },
+        { action: 'draw', shape: 'star', color: '#f39c12', size: 'xlarge', position: 'center' },
+      ]
+    },
+    '树': {
+      reply: '为你画一棵树',
+      commands: [
+        { action: 'draw', shape: 'rect', color: '#795548', size: 'medium', position: 'bottom' },
+        { action: 'draw', shape: 'circle', color: '#27ae60', size: 'xlarge', position: 'center' },
+        { action: 'draw', shape: 'circle', color: '#2ecc71', size: 'large', position: 'top-left' },
+        { action: 'draw', shape: 'circle', color: '#27ae60', size: 'large', position: 'top-right' },
+      ]
+    },
+    '大树': { alias: '树' },
+    '猫': {
+      reply: '为你画一只猫',
+      commands: [
+        { action: 'draw', shape: 'circle', color: '#e67e22', size: 'large', position: 'center' },
+        { action: 'draw', shape: 'triangle', color: '#e67e22', size: 'small', position: 'top-left' },
+        { action: 'draw', shape: 'triangle', color: '#e67e22', size: 'small', position: 'top-right' },
+        { action: 'draw', shape: 'circle', color: '#2c3e50', size: 'small', position: 'top-left' },
+        { action: 'draw', shape: 'circle', color: '#2c3e50', size: 'small', position: 'top-right' },
+        { action: 'draw', shape: 'heart', color: '#e91e63', size: 'small', position: 'center' },
+      ]
+    },
+    '小猫': { alias: '猫' },
+    '狗': {
+      reply: '为你画一只狗',
+      commands: [
+        { action: 'draw', shape: 'circle', color: '#795548', size: 'large', position: 'center' },
+        { action: 'draw', shape: 'circle', color: '#795548', size: 'medium', position: 'top-left' },
+        { action: 'draw', shape: 'circle', color: '#795548', size: 'medium', position: 'top-right' },
+        { action: 'draw', shape: 'circle', color: '#2c3e50', size: 'small', position: 'top-left' },
+        { action: 'draw', shape: 'circle', color: '#2c3e50', size: 'small', position: 'top-right' },
+        { action: 'draw', shape: 'circle', color: '#000000', size: 'small', position: 'center' },
+      ]
+    },
+    '小狗': { alias: '狗' },
+    '彩虹': {
+      reply: '为你画一道彩虹',
+      commands: [
+        { action: 'draw', shape: 'circle', color: '#e74c3c', size: 'xlarge', position: 'center' },
+        { action: 'draw', shape: 'circle', color: '#e67e22', size: 'large', position: 'center' },
+        { action: 'draw', shape: 'circle', color: '#f1c40f', size: 'medium', position: 'center' },
+        { action: 'draw', shape: 'circle', color: '#2ecc71', size: 'small', position: 'center' },
+      ]
+    },
+    '蛋糕': {
+      reply: '为你画一个蛋糕',
+      commands: [
+        { action: 'draw', shape: 'rect', color: '#e91e63', size: 'large', position: 'bottom' },
+        { action: 'draw', shape: 'rect', color: '#f1c40f', size: 'large', position: 'center' },
+        { action: 'draw', shape: 'circle', color: '#e74c3c', size: 'small', position: 'top-left' },
+        { action: 'draw', shape: 'circle', color: '#e74c3c', size: 'small', position: 'top' },
+        { action: 'draw', shape: 'circle', color: '#e74c3c', size: 'small', position: 'top-right' },
+      ]
+    },
+    '气球': {
+      reply: '为你画气球',
+      commands: [
+        { action: 'draw', shape: 'circle', color: '#e74c3c', size: 'large', position: 'top-left' },
+        { action: 'draw', shape: 'circle', color: '#3498db', size: 'large', position: 'top' },
+        { action: 'draw', shape: 'circle', color: '#f1c40f', size: 'large', position: 'top-right' },
+        { action: 'draw', shape: 'line', color: '#2c3e50', size: 'medium', position: 'top-left' },
+        { action: 'draw', shape: 'line', color: '#2c3e50', size: 'medium', position: 'top' },
+        { action: 'draw', shape: 'line', color: '#2c3e50', size: 'medium', position: 'top-right' },
+      ]
+    },
+    '爱心': {
+      reply: '为你画一颗爱心',
+      commands: [
+        { action: 'draw', shape: 'heart', color: '#e74c3c', size: 'xlarge', position: 'center' },
+      ]
+    },
+    '音乐': {
+      reply: '为你画音乐符号',
+      commands: [
+        { action: 'draw', shape: 'circle', color: '#2c3e50', size: 'medium', position: 'bottom-left' },
+        { action: 'draw', shape: 'circle', color: '#2c3e50', size: 'medium', position: 'bottom-right' },
+        { action: 'draw', shape: 'line', color: '#2c3e50', size: 'xlarge', position: 'top' },
+      ]
+    },
+    '机器人': {
+      reply: '为你画一个机器人',
+      commands: [
+        { action: 'draw', shape: 'rect', color: '#95a5a6', size: 'large', position: 'center' },
+        { action: 'draw', shape: 'rect', color: '#7f8c8d', size: 'medium', position: 'top' },
+        { action: 'draw', shape: 'circle', color: '#3498db', size: 'small', position: 'top-left' },
+        { action: 'draw', shape: 'circle', color: '#e74c3c', size: 'small', position: 'top-right' },
+        { action: 'draw', shape: 'rect', color: '#95a5a6', size: 'small', position: 'bottom-left' },
+        { action: 'draw', shape: 'rect', color: '#95a5a6', size: 'small', position: 'bottom-right' },
+      ]
+    },
+    '飞船': {
+      reply: '为你画一艘飞船',
+      commands: [
+        { action: 'draw', shape: 'diamond', color: '#95a5a6', size: 'xlarge', position: 'center' },
+        { action: 'draw', shape: 'circle', color: '#3498db', size: 'medium', position: 'center' },
+        { action: 'draw', shape: 'triangle', color: '#e74c3c', size: 'medium', position: 'bottom' },
+        { action: 'draw', shape: 'triangle', color: '#f39c12', size: 'small', position: 'bottom' },
+      ]
+    },
+    '摩天轮': {
+      reply: '为你画一个摩天轮',
+      commands: [
+        { action: 'draw', shape: 'circle', color: '#e74c3c', size: 'xlarge', position: 'center' },
+        { action: 'draw', shape: 'circle', color: '#3498db', size: 'small', position: 'top' },
+        { action: 'draw', shape: 'circle', color: '#f1c40f', size: 'small', position: 'top-right' },
+        { action: 'draw', shape: 'circle', color: '#2ecc71', size: 'small', position: 'right' },
+        { action: 'draw', shape: 'circle', color: '#9b59b6', size: 'small', position: 'bottom-right' },
+        { action: 'draw', shape: 'circle', color: '#e67e22', size: 'small', position: 'bottom' },
+        { action: 'draw', shape: 'circle', color: '#e91e63', size: 'small', position: 'bottom-left' },
+        { action: 'draw', shape: 'circle', color: '#00bcd4', size: 'small', position: 'left' },
+        { action: 'draw', shape: 'circle', color: '#ff5722', size: 'small', position: 'top-left' },
+        { action: 'draw', shape: 'rect', color: '#795548', size: 'large', position: 'bottom' },
+      ]
+    },
+  };
+
+  // Color modifiers
+  static COLOR_MAP = {
+    '红': 'red', '红色': 'red', '红的': 'red',
+    '蓝': 'blue', '蓝色': 'blue', '蓝的': 'blue',
+    '绿': 'green', '绿色': 'green', '绿的': 'green',
+    '黄': 'yellow', '黄色': 'yellow', '黄的': 'yellow',
+    '紫': 'purple', '紫色': 'purple', '紫的': 'purple',
+    '橙': 'orange', '橙色': 'orange', '橙的': 'orange',
+    '粉': 'pink', '粉色': 'pink', '粉的': 'pink',
+    '黑': 'black', '黑色': 'black',
+    '白': 'white', '白色': 'white',
+    '金': 'yellow', '金色': 'yellow',
+    '银': 'gray', '银色': 'gray',
+  };
+
+  parse(text) {
+    if (!text || !text.trim()) return null;
+    text = text.trim();
+
+    // Check for modification commands
+    const modResult = this._checkModification(text);
+    if (modResult) return modResult;
+
+    // Find matching scene
+    const sceneResult = this._findScene(text);
+    if (sceneResult) {
+      // Apply color modifiers from text
+      const colorMod = this._extractColor(text);
+      if (colorMod) {
+        sceneResult.commands = sceneResult.commands.map(cmd => ({
+          ...cmd,
+          color: this._pickColor(cmd.color, colorMod, text)
+        }));
+      }
+      this.lastCommands = [...sceneResult.commands];
+      return sceneResult;
+    }
+
+    // Try to generate from keywords
+    const generated = this._generateFromKeywords(text);
+    if (generated) {
+      this.lastCommands = [...generated.commands];
+      return generated;
+    }
+
+    return null;
+  }
+
+  _findScene(text) {
+    // Sort by keyword length descending for better matching
+    const entries = Object.entries(AgentEngine.SCENES)
+      .filter(([k, v]) => !v.alias)
+      .sort((a, b) => b[0].length - a[0].length);
+
+    for (const [keyword, scene] of entries) {
+      if (text.includes(keyword)) {
+        // Resolve alias
+        const resolved = scene.alias ? AgentEngine.SCENES[scene.alias] : scene;
+        if (resolved) {
+          return {
+            reply: resolved.reply,
+            commands: JSON.parse(JSON.stringify(resolved.commands)),
+            needConfirm: false,
+          };
+        }
+      }
+    }
+    return null;
+  }
+
+  _extractColor(text) {
+    const sorted = Object.entries(AgentEngine.COLOR_MAP).sort((a, b) => b[0].length - a[0].length);
+    for (const [keyword, color] of sorted) {
+      if (text.includes(keyword)) return color;
+    }
+    return null;
+  }
+
+  _pickColor(originalColor, newColor, text) {
+    // If the user specifies a color, apply it to most shapes but keep some variety
+    return newColor;
+  }
+
+  _checkModification(text) {
+    if (this.lastCommands.length === 0) return null;
+
+    // Size modifications
+    if (text.includes('大一点') || text.includes('放大') || text.includes('变大')) {
+      const sizeUp = { small: 'medium', medium: 'large', large: 'xlarge', xlarge: 'xlarge' };
+      this.lastCommands = this.lastCommands.map(cmd => ({
+        ...cmd, size: sizeUp[cmd.size] || cmd.size
+      }));
+      return { reply: '已放大', commands: this.lastCommands, needConfirm: false };
+    }
+    if (text.includes('小一点') || text.includes('缩小') || text.includes('变小')) {
+      const sizeDown = { xlarge: 'large', large: 'medium', medium: 'small', small: 'small' };
+      this.lastCommands = this.lastCommands.map(cmd => ({
+        ...cmd, size: sizeDown[cmd.size] || cmd.size
+      }));
+      return { reply: '已缩小', commands: this.lastCommands, needConfirm: false };
+    }
+
+    // Color modifications
+    const color = this._extractColor(text);
+    if (color && (text.includes('换成') || text.includes('改成') || text.includes('变'))) {
+      this.lastCommands = this.lastCommands.map(cmd => ({ ...cmd, color }));
+      return { reply: `已换成${color}`, commands: this.lastCommands, needConfirm: false };
+    }
+
+    // Position modifications
+    const positions = {
+      '左边': 'left', '右边': 'right', '上面': 'top', '下面': 'bottom',
+      '中间': 'center', '左上': 'top-left', '右上': 'top-right',
+      '左下': 'bottom-left', '右下': 'bottom-right',
+    };
+    for (const [keyword, pos] of Object.entries(positions)) {
+      if (text.includes(keyword) && (text.includes('移到') || text.includes('移'))) {
+        this.lastCommands = this.lastCommands.map(cmd => ({ ...cmd, position: pos }));
+        return { reply: `已移到${keyword}`, commands: this.lastCommands, needConfirm: false };
+      }
+    }
+
+    return null;
+  }
+
+  _generateFromKeywords(text) {
+    // Try to build a scene from individual keywords
+    const shapes = [];
+    const shapeMap = {
+      '圆': 'circle', '方块': 'rect', '方形': 'rect', '矩形': 'rect',
+      '三角': 'triangle', '星星': 'star', '五角星': 'star',
+      '爱心': 'heart', '心': 'heart', '箭头': 'arrow',
+      '菱形': 'diamond', '波浪': 'wavy', '螺旋': 'spiral',
+    };
+
+    for (const [keyword, shape] of Object.entries(shapeMap)) {
+      if (text.includes(keyword)) shapes.push(shape);
+    }
+
+    if (shapes.length === 0) return null;
+
+    const color = this._extractColor(text) || 'blue';
+    const positions = ['center', 'top-left', 'top-right', 'bottom-left', 'bottom-right', 'left', 'right', 'top', 'bottom'];
+
+    const commands = shapes.map((shape, i) => ({
+      action: 'draw',
+      shape,
+      color,
+      size: i === 0 ? 'large' : 'medium',
+      position: positions[i % positions.length],
+    }));
+
+    return {
+      reply: `为你画${shapes.length}个图形`,
+      commands,
+      needConfirm: false,
+    };
+  }
+}
+
 // ===== Command Parser =====
 class CommandParser {
   parse(text) {
@@ -945,11 +1326,18 @@ class App {
   constructor() {
     this.speech = new SpeechManager();
     this.parser = new CommandParser();
+    this.agent = new AgentEngine();
     this.engine = null;
     this.ui = new UIManager();
     this.ttsEnabled = true;
     this._ttsQueue = [];
     this._isSpeaking = false;
+
+    // Wake word state
+    this.isAwake = false;
+    this.wakeWord = '小溪小溪';
+    this.wakeTimeout = null;
+    this.wakeDuration = 8000; // 8 seconds idle → back to sleep
   }
 
   init() {
@@ -1028,9 +1416,12 @@ class App {
     // Start listening
     this.speech.start();
 
+    // Start in sleeping state, waiting for wake word
+    this._setAwakeState(false);
+
     // Speak welcome message
     setTimeout(() => {
-      this.speak('欢迎使用语音绘图工具，请说出你的指令');
+      this.speak('欢迎使用语音绘图工具，说小溪小溪唤醒我');
     }, 500);
   }
 
@@ -1045,7 +1436,47 @@ class App {
       const text = data.final.trim();
       this.ui.updateTranscript(text, true);
 
-      // Parse commands
+      // --- Wake word logic ---
+      if (!this.isAwake) {
+        // Sleeping: listen for wake word
+        if (text.includes('小溪')) {
+          // Check if it's an agent command: "小溪画XXX"
+          const agentMatch = text.match(/小溪画(.+)/);
+          if (agentMatch) {
+            this._setAwakeState(true);
+            this._handleAgentCommand(agentMatch[1].trim());
+          } else {
+            this._setAwakeState(true);
+            this.speak('我在');
+          }
+        }
+        // Clear transcript after a delay
+        setTimeout(() => {
+          this.ui.updateTranscript('', false);
+        }, 1500);
+        return;
+      }
+
+      // --- Check for agent command while awake: "小溪画XXX" ---
+      const agentMatch = text.match(/小溪画(.+)/);
+      if (agentMatch) {
+        this._handleAgentCommand(agentMatch[1].trim());
+        this._resetWakeTimer();
+        setTimeout(() => this.ui.updateTranscript('', false), 2000);
+        return;
+      }
+
+      // --- Also try agent for modification keywords (大一点, 换成红色, etc.) ---
+      const modKeywords = ['大一点', '小一点', '放大', '缩小', '换成', '移到', '变大', '变小'];
+      const isMod = modKeywords.some(kw => text.includes(kw));
+      if (isMod && this.agent.lastCommands.length > 0) {
+        this._handleAgentCommand(text);
+        this._resetWakeTimer();
+        setTimeout(() => this.ui.updateTranscript('', false), 2000);
+        return;
+      }
+
+      // --- Normal command parsing ---
       const commands = this.parser.parse(text);
       if (commands && commands.length > 0) {
         this._executeCommands(commands, text);
@@ -1054,10 +1485,85 @@ class App {
         this.ui.showToast('未理解指令，请重试', 'error');
       }
 
+      // Reset wake timer after each command attempt
+      this._resetWakeTimer();
+
       // Clear transcript after a delay
       setTimeout(() => {
         this.ui.updateTranscript('', false);
       }, 2000);
+    }
+  }
+
+  _handleAgentCommand(text, mode) {
+    this.ui.showToast('🤖 Agent 思考中...', 'info');
+    this.ui.addHistoryItem(`[Agent] ${text}`, { success: true, message: '正在分析...' });
+
+    const result = this.agent.parse(text);
+
+    if (result) {
+      // Show agent reply
+      if (result.reply) {
+        this.ui.addHistoryItem(`[Agent回复]`, { success: true, message: result.reply });
+        this.speak(result.reply);
+      }
+
+      // Execute commands if any
+      if (result.commands && result.commands.length > 0) {
+        this.ui.showToast(`🎨 Agent 生成了 ${result.commands.length} 个绘图指令`, 'success');
+        this._executeAgentCommands(result.commands);
+      }
+    } else {
+      // Agent couldn't understand
+      this.ui.addHistoryItem(`[Agent]`, { success: false, message: '没有理解你的描述，请换个说法试试' });
+      this.speak('没有理解，请换个说法');
+    }
+  }
+
+  _executeAgentCommands(commands) {
+    let delay = 0;
+    commands.forEach((cmd, i) => {
+      setTimeout(() => {
+        const result = this.engine.execute(cmd);
+        this.ui.addHistoryItem(`[Agent ${i + 1}/${commands.length}]`, result);
+        this.ui.updateSettings(this.engine);
+
+        if (i === commands.length - 1) {
+          this.ui.showSuccess('🎉 绘图完成');
+          this.speak('绘图完成');
+        }
+      }, delay);
+      delay += 500;
+    });
+  }
+
+  _setAwakeState(awake) {
+    this.isAwake = awake;
+    const bar = this.ui.elements.voiceBar;
+    bar.classList.toggle('sleeping', !awake);
+    bar.classList.toggle('awake', awake);
+
+    if (awake) {
+      this.ui.elements.voiceStatus.textContent = '🎤 请说出指令...';
+      this._resetWakeTimer();
+    } else {
+      this.ui.elements.voiceStatus.textContent = '💤 说"小溪小溪"唤醒我';
+      this._clearWakeTimer();
+    }
+  }
+
+  _resetWakeTimer() {
+    this._clearWakeTimer();
+    this.wakeTimeout = setTimeout(() => {
+      this._setAwakeState(false);
+      this.speak('已待机');
+    }, this.wakeDuration);
+  }
+
+  _clearWakeTimer() {
+    if (this.wakeTimeout) {
+      clearTimeout(this.wakeTimeout);
+      this.wakeTimeout = null;
     }
   }
 
