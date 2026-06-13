@@ -1260,12 +1260,26 @@ class App {
     this.ttsEnabled = true;
     this._ttsQueue = [];
     this._isSpeaking = false;
+    this._lastSpokenText = null; // For repeat command
 
     // Wake word state
     this.isAwake = false;
     this.wakeWord = '你好';
     this.wakeTimeout = null;
     this.wakeDuration = 15000; // 15 seconds idle → back to sleep
+
+    // Canvas history for browsing
+    this._canvasHistory = [];
+    this._historyIndex = -1;
+
+    // Pending confirmation for voice confirmation
+    this._pendingConfirmation = null;
+
+    // Clarification counter for unrecognized commands
+    this._clarifyCount = 0;
+
+    // Last image prompt for style transfer
+    this._lastImagePrompt = null;
   }
 
   init() {
@@ -1391,18 +1405,26 @@ class App {
       const text = data.final.trim();
       this.ui.updateTranscript(text, true);
 
+      // --- Stop current TTS if speaking ---
+      if (this._isSpeaking) {
+        this.stopSpeaking();
+      }
+
       // --- Wake word logic ---
       if (!this.isAwake) {
         // Sleeping: listen for wake word
         if (text.includes('你好')) {
-          // Check if there's content after "你好"
+          // Check if there's meaningful content after "你好"
           const afterWake = text.replace(/.*你好/, '').trim();
-          if (afterWake.length > 0) {
+          // Remove common punctuation and whitespace
+          const cleanAfter = afterWake.replace(/[，。！？、\s.,!?]/g, '').trim();
+
+          if (cleanAfter.length > 1) {
             // "你好画一个猫" → wake up and process "画一个猫"
             this._setAwakeState(true);
             this._processCommand(afterWake);
           } else {
-            // Just "你好" → wake up
+            // Just "你好" or "你好。" → wake up
             this._setAwakeState(true);
             this.speak('我在');
           }
@@ -1428,8 +1450,438 @@ class App {
   }
 
   _processCommand(text) {
-    // All commands go to AI image generation
-    this._handleAgentCommand(text);
+    // 1. Check for system commands first
+    if (this._handleSystemCommand(text)) {
+      this._clarifyCount = 0; // Reset counter on successful command
+      return;
+    }
+
+    // 2. Check if it's a drawing request
+    if (this._isDrawingRequest(text)) {
+      this._clarifyCount = 0; // Reset counter on successful command
+      this._handleAgentCommand(text);
+      return;
+    }
+
+    // 3. Not a drawing command - ask for clarification with loop
+    this._clarifyCount = (this._clarifyCount || 0) + 1;
+
+    const responses = [
+      '我没有理解，请说画一个什么，比如画一只猫',
+      '还是没听清，请说出你想画的内容，或者说帮助查看指令',
+      '我需要你的指令，请描述你想画什么，或者说待机让我休息',
+    ];
+
+    const responseIndex = Math.min(this._clarifyCount - 1, responses.length - 1);
+    this.speak(responses[responseIndex]);
+    this.ui.addHistoryItem(text, { success: false, message: '不是绘图指令，请重新描述' });
+
+    // Reset counter after 3 attempts
+    if (this._clarifyCount >= 3) {
+      this._clarifyCount = 0;
+    }
+  }
+
+  _isDrawingRequest(text) {
+    // Drawing intent keywords
+    const drawKeywords = [
+      // Direct drawing verbs
+      '画', '绘制', '画一个', '画个', '画一幅', '画张',
+      '画一只', '画一头', '画一条', '画一棵', '画一朵',
+      '画一座', '画一辆', '画一艘', '画一架',
+
+      // Descriptive drawing requests
+      '画出', '画上', '画着', '画了',
+
+      // Scene/image generation
+      '生成', '创建', '制作', '设计',
+
+      // Specific subjects (animals, objects, scenes)
+      '猫', '狗', '鸟', '鱼', '马', '牛', '羊', '猪', '兔', '龙', '凤',
+      '花', '树', '草', '山', '水', '河', '海', '湖', '天空', '云',
+      '太阳', '月亮', '星星', '彩虹', '雪人',
+      '房子', '城堡', '桥', '船', '飞机', '汽车', '火车',
+      '人物', '女孩', '男孩', '老人', '孩子',
+      '日落', '日出', '风景', '山水', '海滩', '森林', '城市',
+      '蛋糕', '气球', '礼物', '卡片',
+      '机器人', '飞船', '火箭', '星球',
+
+      // Style requests
+      '油画', '水彩', '素描', '卡通', '动漫', '风格',
+
+      // Modification requests (for existing drawings)
+      '大一点', '小一点', '放大', '缩小', '换成', '移到',
+    ];
+
+    // Check if text contains any drawing keyword
+    return drawKeywords.some(keyword => text.includes(keyword));
+  }
+
+  _handleSystemCommand(text) {
+    // Undo
+    if (this._match(text, ['撤销', '返回', '上一步', '回退', '后退'])) {
+      const result = this.engine.undo();
+      this.ui.addHistoryItem(text, result);
+      this.speak(result.message);
+      return true;
+    }
+
+    // Redo
+    if (this._match(text, ['重做', '恢复', '前进', '下一步'])) {
+      const result = this.engine.redo();
+      this.ui.addHistoryItem(text, result);
+      this.speak(result.message);
+      return true;
+    }
+
+    // Clear
+    if (this._match(text, ['清除', '清空', '清空画布', '全部清除', '重来'])) {
+      const result = this.engine.clear();
+      this.ui.addHistoryItem(text, result);
+      this.speak(result.message);
+      return true;
+    }
+
+    // Save/Export - multi-format
+    if (text.includes('保存') || text.includes('导出') || text.includes('下载')) {
+      let format = 'png'; // default
+      if (text.includes('jpg') || text.includes('jpeg')) format = 'jpg';
+      if (text.includes('webp')) format = 'webp';
+      this._saveCanvas(format);
+      return true;
+    }
+
+    // Help
+    if (this._match(text, ['帮助', '怎么用', '怎么操作', '使用说明', '指令'])) {
+      this._speakHelp();
+      return true;
+    }
+
+    // Toggle TTS
+    if (this._match(text, ['静音', '关闭声音', '闭嘴', '不要说话', '安静'])) {
+      this.ttsEnabled = !this.ttsEnabled;
+      const msg = this.ttsEnabled ? '语音播报已开启' : '语音播报已关闭';
+      this.ui.showToast(msg, 'info');
+      if (this.ttsEnabled) this.speak(msg);
+      return true;
+    }
+
+    // Go to sleep
+    if (this._match(text, ['待机', '休眠', '睡觉'])) {
+      this._setAwakeState(false);
+      this.speak('已待机');
+      return true;
+    }
+
+    // Change ratio
+    if (text.includes('正方形') || text.includes('1比1')) {
+      this._setRatio('1:1');
+      return true;
+    }
+    if (text.includes('横屏') || text.includes('4比3') || text.includes('宽屏')) {
+      this._setRatio('4:3');
+      return true;
+    }
+    if (text.includes('竖屏') || text.includes('16比9') || text.includes('长屏')) {
+      this._setRatio('16:9');
+      return true;
+    }
+
+    // Cancel/Stop
+    if (this._match(text, ['停止', '取消', '中断'])) {
+      this._cancelPendingConfirmation();
+      this.ui.showToast('已取消', 'info');
+      this.speak('已取消');
+      return true;
+    }
+
+    // Confirm
+    if (this._match(text, ['确认', '确定', '是的', '对的', '好'])) {
+      this._executePendingConfirmation();
+      return true;
+    }
+
+    // Retry last command
+    if (this._match(text, ['重试', '再来一次', '再试一次', '重新'])) {
+      if (this._lastCommand) {
+        this.speak('正在重试');
+        this._processCommand(this._lastCommand);
+      } else {
+        this.speak('没有可重试的命令');
+      }
+      return true;
+    }
+
+    // Repeat last TTS
+    if (this._match(text, ['再说一遍', '重复', '再说一次'])) {
+      if (this._lastSpokenText) {
+        this.speak(this._lastSpokenText);
+      } else {
+        this.speak('没有可重复的内容');
+      }
+      return true;
+    }
+
+    // TTS volume control
+    if (this._match(text, ['大声点', '声音大一点', '音量大'])) {
+      CONFIG.ttsVolume = Math.min(1, CONFIG.ttsVolume + 0.2);
+      this.speak('音量已调大');
+      return true;
+    }
+    if (this._match(text, ['小声点', '声音小一点', '音量小'])) {
+      CONFIG.ttsVolume = Math.max(0.2, CONFIG.ttsVolume - 0.2);
+      this.speak('音量已调小');
+      return true;
+    }
+
+    // TTS speed control
+    if (this._match(text, ['说快点', '语速快'])) {
+      CONFIG.ttsRate = Math.min(2, CONFIG.ttsRate + 0.2);
+      this.speak('语速已加快');
+      return true;
+    }
+    if (this._match(text, ['说慢点', '语速慢'])) {
+      CONFIG.ttsRate = Math.max(0.5, CONFIG.ttsRate - 0.2);
+      this.speak('语速已减慢');
+      return true;
+    }
+
+    // Canvas management
+    if (this._match(text, ['新建画布', '新建', '新画布'])) {
+      this._pendingConfirmation = { action: 'newCanvas', text: '确认要新建画布吗？当前内容将被清除' };
+      this.speak('确认要新建画布吗？当前内容将被清除。说确认继续，说取消放弃。');
+      return true;
+    }
+
+    // History browsing
+    if (this._match(text, ['上一张', '上一个', '看上一张'])) {
+      this._browseHistory('prev');
+      return true;
+    }
+    if (this._match(text, ['下一张', '下一个', '看下一张'])) {
+      this._browseHistory('next');
+      return true;
+    }
+
+    // Style transfer
+    if (text.includes('风格') || text.includes('油画') || text.includes('水彩') || text.includes('素描')) {
+      this._applyStyleTransfer(text);
+      return true;
+    }
+
+    return false;
+  }
+
+  _match(text, keywords) {
+    // Normalize text - remove common filler words
+    const normalized = text
+      .replace(/一个|一只|一头|一条|一棵|一朵|一座|一辆|一艘|一架/g, '')
+      .replace(/请|帮我|给我|能不能|可以|一下/g, '')
+      .trim();
+
+    return keywords.some(kw => {
+      // Exact match
+      if (text === kw) return true;
+      // Contains match
+      if (text.includes(kw)) return true;
+      // Normalized match
+      if (normalized.includes(kw)) return true;
+      // Fuzzy match for common variations
+      if (this._fuzzyMatch(normalized, kw)) return true;
+      return false;
+    });
+  }
+
+  _fuzzyMatch(text, keyword) {
+    // Common word variations
+    const variations = {
+      '画': ['绘', '画个', '画一个', '画只', '画一幅'],
+      '圆': ['圆形', '圆圈', '圆的'],
+      '方': ['方形', '矩形', '方块', '正方形'],
+      '三角': ['三角形', '三角的'],
+      '星星': ['五角星', '星形'],
+      '爱心': ['心形', '心'],
+      '清除': ['清空', '清理', '擦除', '擦掉'],
+      '撤销': ['回退', '退回', '返回上一步'],
+      '保存': ['存储', '下载', '导出'],
+      '帮助': ['帮忙', '怎么用', '怎么操作'],
+    };
+
+    // Check if keyword has variations
+    for (const [key, vars] of Object.entries(variations)) {
+      if (keyword === key && vars.some(v => text.includes(v))) return true;
+      if (vars.includes(keyword) && text.includes(key)) return true;
+    }
+
+    return false;
+  }
+
+  // ===== Multi-format Export =====
+  _saveCanvas(format = 'png') {
+    try {
+      const canvas = this.engine.canvas;
+      const mimeType = format === 'jpg' ? 'image/jpeg' : format === 'webp' ? 'image/webp' : 'image/png';
+      const link = document.createElement('a');
+      link.download = `语音绘图_${new Date().toISOString().slice(0, 19).replace(/[:-]/g, '')}.${format}`;
+      link.href = canvas.toDataURL(mimeType, 0.92);
+      link.click();
+      this.ui.showToast(`图片已保存为 ${format.toUpperCase()}`, 'success');
+      this.speak(`图片已保存为 ${format.toUpperCase()} 格式`);
+    } catch (err) {
+      this.ui.showError('保存失败: ' + err.message);
+      this.speak('保存失败');
+    }
+  }
+
+  // ===== Canvas Management =====
+  _newCanvas() {
+    this.engine.clear();
+    this._canvasHistory = [];
+    this._historyIndex = -1;
+    this.ui.showToast('新画布已创建', 'success');
+    this.speak('新画布已创建');
+  }
+
+  // ===== History Browsing =====
+  _browseHistory(direction) {
+    // Initialize history if not exists
+    if (!this._canvasHistory) {
+      this._canvasHistory = [];
+      this._historyIndex = -1;
+    }
+
+    // Save current state to history if not already saved
+    if (this._historyIndex === -1 || this._historyIndex >= this._canvasHistory.length - 1) {
+      const currentState = this.engine.canvas.toDataURL();
+      this._canvasHistory.push(currentState);
+      this._historyIndex = this._canvasHistory.length - 1;
+    }
+
+    if (direction === 'prev') {
+      if (this._historyIndex > 0) {
+        this._historyIndex--;
+        this._loadCanvasState(this._canvasHistory[this._historyIndex]);
+        this.speak(`第 ${this._historyIndex + 1} 张`);
+      } else {
+        this.speak('已经是第一张了');
+      }
+    } else if (direction === 'next') {
+      if (this._historyIndex < this._canvasHistory.length - 1) {
+        this._historyIndex++;
+        this._loadCanvasState(this._canvasHistory[this._historyIndex]);
+        this.speak(`第 ${this._historyIndex + 1} 张`);
+      } else {
+        this.speak('已经是最后一张了');
+      }
+    }
+  }
+
+  _loadCanvasState(dataUrl) {
+    const img = new Image();
+    img.onload = () => {
+      const ctx = this.engine.ctx;
+      ctx.clearRect(0, 0, this.engine.width, this.engine.height);
+      ctx.drawImage(img, 0, 0, this.engine.width, this.engine.height);
+    };
+    img.src = dataUrl;
+  }
+
+  // ===== Voice Confirmation =====
+  _executePendingConfirmation() {
+    if (!this._pendingConfirmation) {
+      this.speak('没有待确认的操作');
+      return;
+    }
+
+    const pending = this._pendingConfirmation;
+    this._pendingConfirmation = null;
+
+    switch (pending.action) {
+      case 'newCanvas':
+        this._newCanvas();
+        break;
+      case 'styleTransfer':
+        this._executeStyleTransfer(pending.style);
+        break;
+      default:
+        this.speak('操作已确认');
+    }
+  }
+
+  _cancelPendingConfirmation() {
+    this._pendingConfirmation = null;
+  }
+
+  // ===== Style Transfer =====
+  async _applyStyleTransfer(text) {
+    // Check if there's a last prompt to use for style transfer
+    if (!this._lastImagePrompt) {
+      this.speak('请先生成一张图片，然后再进行风格转换');
+      return;
+    }
+
+    // Determine style
+    let style = '油画';
+    if (text.includes('水彩')) style = '水彩';
+    if (text.includes('素描')) style = '素描';
+    if (text.includes('卡通')) style = '卡通';
+    if (text.includes('动漫')) style = '动漫';
+    if (text.includes('油画')) style = '油画';
+
+    // Ask for confirmation
+    this._pendingConfirmation = { action: 'styleTransfer', style };
+    this.speak(`确认要将图片转换为${style}风格吗？说确认继续，说取消放弃。`);
+  }
+
+  async _executeStyleTransfer(style) {
+    this._clearWakeTimer();
+
+    // Show loading overlay
+    const overlay = document.getElementById('generating-overlay');
+    overlay.classList.remove('hidden');
+
+    this.ui.showToast(`🎨 正在转换为${style}风格...`, 'info');
+    this.speak(`正在转换为${style}风格`);
+
+    try {
+      // Convert style name to English prompt
+      const stylePrompts = {
+        '油画': 'oil painting style, classical art, rich colors',
+        '水彩': 'watercolor painting style, soft colors, artistic',
+        '素描': 'pencil sketch style, black and white, detailed',
+        '卡通': 'cartoon style, colorful, cute',
+        '动漫': 'anime style, Japanese animation, vibrant',
+      };
+
+      const stylePrompt = stylePrompts[style] || style;
+      // Combine original prompt with style
+      const fullPrompt = `${this._lastImagePrompt}, ${stylePrompt}, masterpiece, high quality`;
+
+      // Generate new image with original content + new style
+      const imageUrl = await this.imageGenerator.generate(fullPrompt, this.imageRatio);
+      await this._drawImageOnCanvas(imageUrl);
+
+      this.ui.showSuccess(`🎉 ${style}风格转换完成`);
+      this.speak(`${style}风格转换完成`);
+    } catch (err) {
+      console.error('Style transfer failed:', err);
+      this.ui.showError('风格转换失败: ' + err.message);
+      this.speak('风格转换失败');
+    } finally {
+      overlay.classList.add('hidden');
+    }
+
+    this._resetWakeTimer();
+  }
+
+  // ===== Track last spoken text for "repeat" command =====
+  speak(text) {
+    if (!this.ttsEnabled) return;
+    this._lastSpokenText = text;
+    this._ttsQueue.push(text);
+    if (!this._isSpeaking) {
+      this._speakNext();
+    }
   }
 
   _setupDraggable(element, handle) {
@@ -1508,6 +1960,10 @@ class App {
     try {
       const imageUrl = await this.imageGenerator.generate(prompt, this.imageRatio);
       await this._drawImageOnCanvas(imageUrl);
+
+      // Save the prompt for style transfer
+      this._lastImagePrompt = prompt;
+
       this.ui.showSuccess('🎉 图片生成完成');
       this.speak('图片生成完成');
       this.ui.addHistoryItem(`[AI绘图]`, { success: true, message: '图片已绘制到画布' });
@@ -1680,32 +2136,14 @@ class App {
     }
   }
 
-  speak(text) {
-    if (!this.ttsEnabled) return;
-
-    this._ttsQueue.push(text);
-    if (!this._isSpeaking) {
-      this._speakNext();
-    }
-  }
-
   async _speakNext() {
     if (this._ttsQueue.length === 0) {
       this._isSpeaking = false;
-      // Resume speech recognition after TTS finishes
-      if (this.speech && !this.speech.isMuted) {
-        setTimeout(() => this.speech.start(), 50);
-      }
+      this._currentAudio = null;
       return;
     }
 
     this._isSpeaking = true;
-
-    // Pause speech recognition during TTS to avoid echo
-    if (this.speech && this.speech.isListening) {
-      this.speech.stop();
-    }
-
     const text = this._ttsQueue.shift();
 
     try {
@@ -1715,7 +2153,7 @@ class App {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text: text,
-          voice: 'zh-CN-XiaoxiaoNeural', // 晓晓 - 高质量中文女声
+          voice: 'zh-CN-XiaoxiaoNeural',
         }),
       });
 
@@ -1726,14 +2164,17 @@ class App {
       const audioBlob = await response.blob();
       const audioUrl = URL.createObjectURL(audioBlob);
       const audio = new Audio(audioUrl);
+      this._currentAudio = audio; // Store reference for interruption
 
       audio.onended = () => {
         URL.revokeObjectURL(audioUrl);
+        this._currentAudio = null;
         this._speakNext();
       };
 
       audio.onerror = () => {
         URL.revokeObjectURL(audioUrl);
+        this._currentAudio = null;
         this._speakNext();
       };
 
@@ -1743,6 +2184,17 @@ class App {
       // Fallback to browser speech synthesis
       this._speakWithBrowserTTS(text);
     }
+  }
+
+  // Stop current TTS playback and clear queue
+  stopSpeaking() {
+    if (this._currentAudio) {
+      this._currentAudio.pause();
+      this._currentAudio.currentTime = 0;
+      this._currentAudio = null;
+    }
+    this._ttsQueue = [];
+    this._isSpeaking = false;
   }
 
   _speakWithBrowserTTS(text) {

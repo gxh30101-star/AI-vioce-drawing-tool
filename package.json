@@ -3,8 +3,16 @@
   "version": "1.0.0",
   "description": "纯语音控制绘图工具 - Voice-controlled drawing tool",
   "main": "server.js",
+  "bin": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "build": "pkg . --targets node18-win-x64 --output dist/语音绘图工具.exe"
+  },
+  "pkg": {
+    "assets": [
+      "public/**/*"
+    ],
+    "outputPath": "dist"
   },
   "keywords": [
     "voice",
