@@ -6,6 +6,15 @@
   "scripts": {
     "start": "node server.js"
   },
-  "keywords": ["voice", "drawing", "speech-recognition", "canvas"],
-  "license": "MIT"
+  "keywords": [
+    "voice",
+    "drawing",
+    "speech-recognition",
+    "canvas"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "edge-tts": "^1.0.1",
+    "msedge-tts": "^2.0.5"
+  }
 }

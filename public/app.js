@@ -184,67 +184,80 @@ class ImageGenerator {
   constructor(serverUrl = '') {
     this.serverUrl = serverUrl;
     this.isGenerating = false;
-    this.services = [
-      this._tryPollinations.bind(this),
-      this._tryCraiyon.bind(this),
-    ];
+    this.apiKey = 'sk-SeSleKEh1AGJfAOw2npfZLzqA8Tmehts7BEj6VxY5djNrcIP';
+    this.apiBase = 'https://apihub.agnes-ai.com/v1';
+    this.model = 'agnes-image-2.0-flash';
   }
 
-  async generate(prompt, width = 1024, height = 768) {
+  async generate(prompt, ratio = '1:1') {
     this.isGenerating = true;
 
-    for (const service of this.services) {
-      try {
-        const result = await service(prompt, width, height);
-        if (result) {
-          this.isGenerating = false;
-          return result;
-        }
-      } catch (err) {
-        console.warn('Service failed:', err.message);
+    try {
+      // Translate Chinese prompt to English for better results
+      const englishPrompt = this._translatePrompt(prompt);
+      console.log('Generating image with prompt:', englishPrompt, 'ratio:', ratio);
+
+      // Use server proxy to avoid CORS issues
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 120000);
+
+      const res = await fetch(`${this.serverUrl}/api/generate-image`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: englishPrompt, ratio: ratio }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `HTTP ${res.status}`);
       }
+
+      const blob = await res.blob();
+      console.log('Image fetched, size:', blob.size);
+      return URL.createObjectURL(blob);
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        throw new Error('请求超时，请重试');
+      }
+      throw err;
+    } finally {
+      this.isGenerating = false;
+    }
+  }
+
+  _translatePrompt(text) {
+    // Common Chinese to English translations for better image generation
+    const translations = {
+      '猫': 'cute cat', '小猫': 'cute kitten', '狗': 'cute dog', '小狗': 'cute puppy',
+      '日落': 'beautiful sunset', '夕阳': 'sunset', '海滩': 'beach', '沙滩': 'sandy beach',
+      '城堡': 'castle', '房子': 'house', '花园': 'garden', '星空': 'starry sky',
+      '夜空': 'night sky', '山水': 'mountains and water', '雪人': 'snowman',
+      '太阳': 'sun', '树': 'tree', '彩虹': 'rainbow', '蛋糕': 'cake',
+      '气球': 'balloons', '爱心': 'heart', '音乐': 'music', '机器人': 'robot',
+      '飞船': 'spaceship', '摩天轮': 'ferris wheel', '花': 'flowers',
+      '蝴蝶': 'butterfly', '龙': 'dragon', '凤凰': 'phoenix', '熊猫': 'panda',
+      '美人鱼': 'mermaid', '森林': 'forest', '海洋': 'ocean', '月亮': 'moon',
+      '向日葵': 'sunflowers', '樱花': 'cherry blossom', '雪山': 'snowy mountain',
+      '城市': 'city', '宇宙': 'space', '画': 'painting of', '一只': 'a',
+      '一幅': 'a', '可爱的': 'cute', '美丽的': 'beautiful', '大的': 'big',
+      '小的': 'small', '红色': 'red', '蓝色': 'blue', '绿色': 'green',
+      '黄色': 'yellow', '紫色': 'purple', '橙色': 'orange', '粉色': 'pink',
+    };
+
+    let result = text;
+    for (const [zh, en] of Object.entries(translations)) {
+      result = result.replace(new RegExp(zh, 'g'), en);
     }
 
-    this.isGenerating = false;
-    throw new Error('所有图片生成服务都失败了，请稍后再试');
-  }
+    // If still contains Chinese characters, append style suffix
+    if (/[一-龥]/.test(result)) {
+      return `${result}, beautiful illustration, detailed, high quality, digital art`;
+    }
 
-  async _tryPollinations(prompt, width, height) {
-    const encodedPrompt = encodeURIComponent(prompt);
-    // Add random seed to bypass rate limit
-    const seed = Math.floor(Math.random() * 999999);
-    const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${width}&height=${height}&nologo=true&seed=${seed}`;
-
-    const res = await fetch(url, { mode: 'cors' });
-    if (!res.ok) return null;
-
-    const blob = await res.blob();
-    if (!blob.type.startsWith('image/')) return null;
-
-    return URL.createObjectURL(blob);
-  }
-
-  async _tryCraiyon(prompt, width, height) {
-    // Use Craiyon API (free, no key needed)
-    const res = await fetch('https://api.craiyon.com/v3', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        prompt: prompt,
-        negative_prompt: '',
-        model: 'art',
-      }),
-    });
-
-    if (!res.ok) return null;
-
-    const data = await res.json();
-    if (!data.images || data.images.length === 0) return null;
-
-    // Craiyon returns base64 images
-    const imageData = data.images[0];
-    const blob = await fetch(`data:image/jpeg;base64,${imageData}`).then(r => r.blob());
-    return URL.createObjectURL(blob);
+    return `${result}, beautiful, detailed, high quality, digital art`;
   }
 }
 
@@ -1171,12 +1184,18 @@ class UIManager {
 
   updateSettings(engine) {
     const { currentColorDot, currentColorName, currentSizeName, currentShapeName } = this.elements;
-    currentColorDot.style.backgroundColor = engine.currentColor;
-    const cName = COLOR_NAMES[engine.currentColor] || engine.currentColor;
-    currentColorName.textContent = cName;
-    currentSizeName.textContent = SIZE_NAMES[engine.currentSize] || engine.currentSize;
-    const shapeEntry = Object.entries(SHAPES).find(([_, v]) => v === engine.currentShape);
-    currentShapeName.textContent = shapeEntry ? shapeEntry[0] : engine.currentShape;
+
+    // These elements may not exist if removed from UI
+    if (currentColorDot) currentColorDot.style.backgroundColor = engine.currentColor;
+    if (currentColorName) {
+      const cName = COLOR_NAMES[engine.currentColor] || engine.currentColor;
+      currentColorName.textContent = cName;
+    }
+    if (currentSizeName) currentSizeName.textContent = SIZE_NAMES[engine.currentSize] || engine.currentSize;
+    if (currentShapeName) {
+      const shapeEntry = Object.entries(SHAPES).find(([_, v]) => v === engine.currentShape);
+      currentShapeName.textContent = shapeEntry ? shapeEntry[0] : engine.currentShape;
+    }
   }
 
   addHistoryItem(text, result) {
@@ -1289,6 +1308,21 @@ class App {
       this.ui.hidePermissionOverlay();
     });
 
+    // Setup ratio selector
+    this.imageRatio = '1:1'; // Default ratio
+    const ratioButtons = document.querySelectorAll('.ratio-btn');
+    ratioButtons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        // Remove active class from all buttons
+        ratioButtons.forEach(b => b.classList.remove('active'));
+        // Add active class to clicked button
+        btn.classList.add('active');
+        // Update ratio
+        this.imageRatio = btn.dataset.ratio;
+        console.log('Image ratio set to:', this.imageRatio);
+      });
+    });
+
     // Setup mic toggle
     this.ui.elements.micToggle.addEventListener('click', () => {
       const muted = this.speech.toggleMute();
@@ -1394,22 +1428,7 @@ class App {
   }
 
   _processCommand(text) {
-    // 1. Check for modification keywords
-    const modKeywords = ['大一点', '小一点', '放大', '缩小', '换成', '移到', '变大', '变小'];
-    const isMod = modKeywords.some(kw => text.includes(kw));
-    if (isMod && this.agent.lastCommands.length > 0) {
-      this._handleAgentCommand(text);
-      return;
-    }
-
-    // 2. Try local command parsing first
-    const commands = this.parser.parse(text);
-    if (commands && commands.length > 0) {
-      this._executeCommands(commands, text);
-      return;
-    }
-
-    // 3. No local match → use AI image generation
+    // All commands go to AI image generation
     this._handleAgentCommand(text);
   }
 
@@ -1483,39 +1502,23 @@ class App {
     const overlay = document.getElementById('generating-overlay');
     overlay.classList.remove('hidden');
 
-    this.ui.showToast('🎨 正在生成图片，请稍候...', 'info');
+    this.ui.showToast('🎨 正在生成图片，预计需要30-60秒...', 'info');
     this.ui.addHistoryItem(`[AI绘图]`, { success: true, message: `正在生成: ${prompt}` });
 
-    const maxRetries = 2;
-    let lastError = null;
-
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      try {
-        if (attempt > 0) {
-          this.ui.showToast(`🔄 重试中... (${attempt}/${maxRetries})`, 'info');
-          await new Promise(r => setTimeout(r, 2000)); // Wait 2 seconds before retry
-        }
-
-        const imageUrl = await this.imageGenerator.generate(prompt);
-        await this._drawImageOnCanvas(imageUrl);
-        this.ui.showSuccess('🎉 图片生成完成');
-        this.speak('图片生成完成');
-        this.ui.addHistoryItem(`[AI绘图]`, { success: true, message: '图片已绘制到画布' });
-        overlay.classList.add('hidden');
-        this._resetWakeTimer();
-        return; // Success, exit
-      } catch (err) {
-        lastError = err;
-        console.warn(`Image generation attempt ${attempt + 1} failed:`, err.message);
-      }
+    try {
+      const imageUrl = await this.imageGenerator.generate(prompt, this.imageRatio);
+      await this._drawImageOnCanvas(imageUrl);
+      this.ui.showSuccess('🎉 图片生成完成');
+      this.speak('图片生成完成');
+      this.ui.addHistoryItem(`[AI绘图]`, { success: true, message: '图片已绘制到画布' });
+    } catch (err) {
+      console.error('Image generation failed:', err);
+      this.ui.showError('图片生成失败: ' + (err.message || '请重试'));
+      this.speak('图片生成失败');
+      this.ui.addHistoryItem(`[AI绘图]`, { success: false, message: err.message });
+    } finally {
+      overlay.classList.add('hidden');
     }
-
-    // All attempts failed
-    overlay.classList.add('hidden');
-    const errorMsg = lastError?.message || '未知错误';
-    this.ui.showError('图片生成失败: ' + errorMsg);
-    this.speak('图片生成失败，请稍后再试');
-    this.ui.addHistoryItem(`[AI绘图]`, { success: false, message: errorMsg });
 
     this._resetWakeTimer();
   }
@@ -1678,7 +1681,7 @@ class App {
   }
 
   speak(text) {
-    if (!this.ttsEnabled || !window.speechSynthesis) return;
+    if (!this.ttsEnabled) return;
 
     this._ttsQueue.push(text);
     if (!this._isSpeaking) {
@@ -1686,12 +1689,12 @@ class App {
     }
   }
 
-  _speakNext() {
+  async _speakNext() {
     if (this._ttsQueue.length === 0) {
       this._isSpeaking = false;
       // Resume speech recognition after TTS finishes
       if (this.speech && !this.speech.isMuted) {
-        setTimeout(() => this.speech.start(), 200);
+        setTimeout(() => this.speech.start(), 50);
       }
       return;
     }
@@ -1704,12 +1707,50 @@ class App {
     }
 
     const text = this._ttsQueue.shift();
+
+    try {
+      // Use Edge TTS via server
+      const response = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: text,
+          voice: 'zh-CN-XiaoxiaoNeural', // 晓晓 - 高质量中文女声
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('TTS request failed');
+      }
+
+      const audioBlob = await response.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
+
+      audio.onended = () => {
+        URL.revokeObjectURL(audioUrl);
+        this._speakNext();
+      };
+
+      audio.onerror = () => {
+        URL.revokeObjectURL(audioUrl);
+        this._speakNext();
+      };
+
+      await audio.play();
+    } catch (err) {
+      console.error('TTS error:', err);
+      // Fallback to browser speech synthesis
+      this._speakWithBrowserTTS(text);
+    }
+  }
+
+  _speakWithBrowserTTS(text) {
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = 'zh-CN';
     utterance.rate = CONFIG.ttsRate;
     utterance.volume = CONFIG.ttsVolume;
 
-    // Try to use a Chinese voice
     const voices = speechSynthesis.getVoices();
     const zhVoice = voices.find(v => v.lang.startsWith('zh'));
     if (zhVoice) utterance.voice = zhVoice;

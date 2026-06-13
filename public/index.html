@@ -54,19 +54,12 @@
     <div id="top-bar">
       <div id="settings-panel">
         <div class="setting-item">
-          <span class="setting-label">颜色</span>
-          <span id="current-color-dot" class="color-dot"></span>
-          <span id="current-color-name">黑色</span>
-        </div>
-        <div class="setting-divider"></div>
-        <div class="setting-item">
-          <span class="setting-label">大小</span>
-          <span id="current-size-name">中等</span>
-        </div>
-        <div class="setting-divider"></div>
-        <div class="setting-item">
-          <span class="setting-label">工具</span>
-          <span id="current-shape-name">圆形</span>
+          <span class="setting-label">比例</span>
+          <div class="ratio-selector">
+            <button class="ratio-btn active" data-ratio="1:1">1:1</button>
+            <button class="ratio-btn" data-ratio="4:3">4:3</button>
+            <button class="ratio-btn" data-ratio="16:9">16:9</button>
+          </div>
         </div>
       </div>
       <div id="voice-controls">
@@ -112,59 +105,40 @@
       <div class="help-content">
         <div class="help-section">
           <h4>唤醒</h4>
-          <p>说 <strong>"你好"</strong> 唤醒工具，然后说出绘图指令</p>
-          <p>8秒无操作自动回到待机状态</p>
+          <p>说 <strong>"你好"</strong> 唤醒工具</p>
+          <p>15秒无操作自动回到待机状态</p>
         </div>
         <div class="help-section">
-          <h4>🤖 AI 智能绘图</h4>
+          <h4>🎨 AI 绘图</h4>
           <p>唤醒后直接描述，AI 自动生成图片</p>
-          <p>例如："一幅日落海滩"、"一只可爱的猫咪"</p>
-          <p>如果描述不匹配本地指令，自动调用 AI 生成</p>
+          <p>生成时间约 30-60 秒，请耐心等待</p>
         </div>
         <div class="help-section">
-          <h4>基本绘图</h4>
-          <p>"画一个圆" / "画个方块" / "画三角形" / "画直线" / "画五角星" / "画爱心" / "画箭头"</p>
-        </div>
-        <div class="help-section">
-          <h4>指定颜色</h4>
-          <p>"用红色画一个圆" / "画个蓝色的方块" / "绿色三角"</p>
-        </div>
-        <div class="help-section">
-          <h4>指定大小</h4>
-          <p>"画一个大圆" / "小方块" / "画个超大五角星"</p>
-        </div>
-        <div class="help-section">
-          <h4>指定位置</h4>
-          <p>"在中间画个圆" / "左上角画个三角" / "右边画条线"</p>
-        </div>
-        <div class="help-section">
-          <h4>复合指令</h4>
-          <p>"用红色画一个大圆在中间" / "画一个蓝方块然后画一个红圆"</p>
-        </div>
-        <div class="help-section">
-          <h4>修改设置</h4>
-          <p>"红色" / "大一点" / "小一点" / "换成画方块"</p>
+          <h4>示例指令</h4>
+          <p>"画一只可爱的猫咪"</p>
+          <p>"一幅日落海滩风景画"</p>
+          <p>"一座童话城堡"</p>
+          <p>"星空下的城市"</p>
+          <p>"水墨山水画"</p>
+          <p>"一个机器人在太空"</p>
         </div>
         <div class="help-section">
           <h4>操作控制</h4>
-          <p>"撤销" / "重做" / "清除" / "清空画布"</p>
-        </div>
-        <div class="help-section">
-          <h4>特殊画法</h4>
-          <p>"画波浪线" / "画虚线" / "画螺旋" / "写文字你好"</p>
+          <p>"清除" / "清空画布"</p>
         </div>
       </div>
     </div>
 
     <!-- Welcome hint -->
     <div id="welcome-hint" class="fade-out-slow">
-      说 &ldquo;你好&rdquo; 唤醒，然后直接描述你想画的内容
+      说 &ldquo;你好&rdquo; 唤醒，然后描述你想画的内容
     </div>
 
     <!-- AI Image Generation Loading Overlay -->
     <div id="generating-overlay" class="generating-overlay hidden">
       <div class="generating-spinner"></div>
       <div class="generating-text">🎨 AI 正在生成图片...</div>
+      <div class="generating-hint">预计需要 30-60 秒，请耐心等待</div>
     </div>
   </div>
 

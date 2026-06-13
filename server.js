@@ -2,6 +2,7 @@ const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
+const { MsEdgeTTS } = require('msedge-tts');
 
 const PORT = 3001;
 const PUBLIC = path.join(__dirname, 'public');
@@ -93,99 +94,62 @@ function parseBody(req) {
   });
 }
 
-// ===== Fetch image from multiple services =====
+// ===== Agnes.ai Configuration =====
+const AGNES_API_KEY = 'sk-SeSleKEh1AGJfAOw2npfZLzqA8Tmehts7BEj6VxY5djNrcIP';
+const AGNES_API_BASE = 'https://apihub.agnes-ai.com/v1';
+const AGNES_MODEL = 'agnes-image-2.0-flash';
+
+// ===== Fetch image from agnes.ai =====
 async function fetchImage(prompt, width, height) {
-  // Try Pollinations.ai first
-  try {
-    const encodedPrompt = encodeURIComponent(prompt);
-    const seed = Math.floor(Math.random() * 999999);
-    const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${width}&height=${height}&nologo=true&seed=${seed}`;
+  const postData = JSON.stringify({
+    model: AGNES_MODEL,
+    prompt: prompt,
+    n: 1,
+    size: `${width}x${height}`,
+  });
 
-    const result = await new Promise((resolve, reject) => {
-      https.get(url, { timeout: 60000 }, (res) => {
-        if (res.statusCode === 302 || res.statusCode === 301) {
-          https.get(res.headers.location, { timeout: 60000 }, (res2) => {
-            const chunks = [];
-            res2.on('data', chunk => chunks.push(chunk));
-            res2.on('end', () => {
-              const buffer = Buffer.concat(chunks);
-              const contentType = res2.headers['content-type'] || '';
-              if (contentType.includes('application/json') || buffer[0] === 0x7B) {
-                reject(new Error('Rate limit'));
-              } else {
-                resolve(buffer);
-              }
-            });
-            res2.on('error', reject);
-          }).on('error', reject);
-          return;
-        }
-
-        const contentType = res.headers['content-type'] || '';
-        const chunks = [];
-        res.on('data', chunk => chunks.push(chunk));
-        res.on('end', () => {
-          const buffer = Buffer.concat(chunks);
-          if (contentType.includes('application/json') || buffer[0] === 0x7B) {
-            reject(new Error('Rate limit'));
-          } else {
-            resolve(buffer);
-          }
-        });
-        res.on('error', reject);
-      }).on('error', reject);
-    });
-
-    return result;
-  } catch (err) {
-    console.log('Pollinations failed, trying Craiyon...');
-  }
-
-  // Fallback: Try Craiyon
-  try {
-    const craiyonResult = await fetchCraiyon(prompt);
-    if (craiyonResult) return craiyonResult;
-  } catch (err) {
-    console.log('Craiyon failed:', err.message);
-  }
-
-  throw new Error('所有图片生成服务都失败了，请稍后再试');
-}
-
-// ===== Fetch from Craiyon =====
-function fetchCraiyon(prompt) {
   return new Promise((resolve, reject) => {
-    const postData = JSON.stringify({
-      prompt: prompt,
-      negative_prompt: '',
-      model: 'art',
-    });
-
-    const options = {
-      hostname: 'api.craiyon.com',
-      path: '/v3',
+    const url = new URL(`${AGNES_API_BASE}/images/generations`);
+    const req = https.request({
+      hostname: url.hostname,
+      port: url.port || 443,
+      path: url.pathname,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Authorization': `Bearer ${AGNES_API_KEY}`,
         'Content-Length': Buffer.byteLength(postData),
       },
-      timeout: 120000,
-    };
-
-    const req = https.request(options, (res) => {
+      timeout: 60000,
+    }, (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
         try {
           const json = JSON.parse(data);
-          if (json.images && json.images.length > 0) {
-            const imageBuffer = Buffer.from(json.images[0], 'base64');
-            resolve(imageBuffer);
-          } else {
-            reject(new Error('No images returned'));
+
+          if (json.error) {
+            reject(new Error(json.error.message || 'Image generation failed'));
+            return;
           }
+
+          if (!json.data || json.data.length === 0) {
+            reject(new Error('No image generated'));
+            return;
+          }
+
+          const imageUrl = json.data[0].url;
+
+          // Fetch the actual image
+          https.get(imageUrl, { timeout: 30000 }, (imgRes) => {
+            const chunks = [];
+            imgRes.on('data', chunk => chunks.push(chunk));
+            imgRes.on('end', () => resolve(Buffer.concat(chunks)));
+            imgRes.on('error', reject);
+          }).on('error', reject);
+
         } catch (e) {
-          reject(new Error('Invalid Craiyon response'));
+          reject(new Error('Invalid response from agnes.ai'));
         }
       });
     });
@@ -193,7 +157,7 @@ function fetchCraiyon(prompt) {
     req.on('error', reject);
     req.on('timeout', () => {
       req.destroy();
-      reject(new Error('Craiyon request timeout'));
+      reject(new Error('Request timeout'));
     });
 
     req.write(postData);
@@ -222,7 +186,7 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'POST') {
         try {
           const body = await parseBody(req);
-          const { prompt, width = 1024, height = 768 } = body;
+          const { prompt, ratio = '1:1' } = body;
 
           if (!prompt) {
             res.writeHead(400, {
@@ -233,7 +197,25 @@ const server = http.createServer(async (req, res) => {
             return;
           }
 
-          console.log(`Generating image: "${prompt}" (${width}x${height})`);
+          // Convert ratio to dimensions
+          let width, height;
+          switch (ratio) {
+            case '4:3':
+              width = 1024;
+              height = 768;
+              break;
+            case '16:9':
+              width = 1024;
+              height = 576;
+              break;
+            case '1:1':
+            default:
+              width = 1024;
+              height = 1024;
+              break;
+          }
+
+          console.log(`Generating image: "${prompt}" ratio: ${ratio} (${width}x${height})`);
           const englishPrompt = buildPrompt(prompt);
           console.log(`English prompt: "${englishPrompt}"`);
 
@@ -248,6 +230,71 @@ const server = http.createServer(async (req, res) => {
           res.end(imageBuffer);
         } catch (err) {
           console.error('Image generation error:', err.message);
+          res.writeHead(500, {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+          });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+        return;
+      }
+    }
+
+    // --- TTS API ---
+    if (urlPath === '/api/tts') {
+      // Handle CORS preflight
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204, {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type',
+        });
+        res.end();
+        return;
+      }
+
+      if (req.method === 'POST') {
+        try {
+          const body = await parseBody(req);
+          const { text, voice = 'zh-CN-XiaoxiaoNeural' } = body;
+
+          if (!text) {
+            res.writeHead(400, {
+              'Content-Type': 'application/json',
+              'Access-Control-Allow-Origin': '*',
+            });
+            res.end(JSON.stringify({ error: 'Missing text' }));
+            return;
+          }
+
+          console.log(`TTS: "${text}" with voice ${voice}`);
+
+          const tts = new MsEdgeTTS();
+          await tts.setMetadata(voice, 'audio-24khz-96kbitrate-mono-mp3', 'default');
+
+          // Use toFile to generate audio (it expects a directory, creates audio.mp3 inside)
+          const tempDir = path.join(__dirname, 'temp_tts');
+          if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+
+          await tts.toFile(tempDir, text);
+
+          // Read the generated file
+          const audioFile = path.join(tempDir, 'audio.mp3');
+          const audioBuffer = fs.readFileSync(audioFile);
+
+          // Clean up
+          try { fs.unlinkSync(audioFile); } catch (e) {}
+          try { fs.rmdirSync(tempDir); } catch (e) {}
+
+          res.writeHead(200, {
+            'Content-Type': 'audio/mpeg',
+            'Content-Length': audioBuffer.length,
+            'Cache-Control': 'no-cache',
+            'Access-Control-Allow-Origin': '*',
+          });
+          res.end(audioBuffer);
+        } catch (err) {
+          console.error('TTS error:', err.message);
           res.writeHead(500, {
             'Content-Type': 'application/json',
             'Access-Control-Allow-Origin': '*',

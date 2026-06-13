@@ -244,6 +244,33 @@ body {
   box-shadow: 0 1px 3px rgba(0,0,0,0.1);
 }
 
+.ratio-selector {
+  display: flex; gap: 4px;
+}
+
+.ratio-btn {
+  padding: 4px 10px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.ratio-btn:hover {
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--text-primary);
+}
+
+.ratio-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
 .setting-divider {
   width: 1px; height: 18px;
   background: var(--panel-border);
@@ -621,6 +648,12 @@ body {
   font-size: 18px;
   margin-top: 16px;
   animation: pulse-text 1.5s ease-in-out infinite;
+}
+
+.generating-hint {
+  color: var(--text-secondary);
+  font-size: 14px;
+  margin-top: 8px;
 }
 
 @keyframes spin {
