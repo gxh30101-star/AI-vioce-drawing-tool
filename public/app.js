@@ -1120,13 +1120,9 @@ class UIManager {
       startOverlay: document.getElementById('start-overlay'),
       startBtn: document.getElementById('start-btn'),
       canvas: document.getElementById('drawing-canvas'),
-      voiceBar: document.getElementById('voice-bar'),
+      voiceIndicator: document.getElementById('voice-indicator'),
       voiceStatus: document.getElementById('voice-status-text'),
-      transcript: document.getElementById('transcript'),
-      currentColorDot: document.getElementById('current-color-dot'),
-      currentColorName: document.getElementById('current-color-name'),
-      currentSizeName: document.getElementById('current-size-name'),
-      currentShapeName: document.getElementById('current-shape-name'),
+      transcript: document.getElementById('voice-transcript'),
       historyList: document.getElementById('history-list'),
       historyPanel: document.getElementById('history-panel'),
       helpPanel: document.getElementById('help-panel'),
@@ -1140,7 +1136,6 @@ class UIManager {
       permMessage: document.getElementById('perm-message'),
       permRetryBtn: document.getElementById('perm-retry-btn'),
       permCancelBtn: document.getElementById('perm-cancel-btn'),
-      generatingOverlay: document.getElementById('generating-overlay'),
     };
   }
 
@@ -1159,19 +1154,20 @@ class UIManager {
   }
 
   setListening(isListening) {
-    const bar = this.elements.voiceBar;
-    bar.classList.toggle('listening', isListening);
-    bar.classList.toggle('muted', false);
+    const indicator = this.elements.voiceIndicator;
+    if (!indicator) return;
+    indicator.classList.toggle('listening', isListening);
     // Only update status text if not in sleeping/awake mode
-    if (!bar.classList.contains('sleeping') && !bar.classList.contains('awake')) {
+    if (!indicator.classList.contains('sleeping') && !indicator.classList.contains('awake')) {
       this.elements.voiceStatus.textContent = isListening ? '正在聆听...' : '已暂停';
     }
   }
 
   setMuted(isMuted) {
-    const bar = this.elements.voiceBar;
-    bar.classList.toggle('muted', isMuted);
-    bar.classList.toggle('listening', false);
+    const indicator = this.elements.voiceIndicator;
+    if (!indicator) return;
+    indicator.classList.toggle('muted', isMuted);
+    indicator.classList.toggle('listening', false);
     this.elements.voiceStatus.textContent = isMuted ? '麦克风已关闭' : '正在聆听...';
     this.elements.micToggle.classList.toggle('muted', isMuted);
   }
@@ -1257,9 +1253,7 @@ class App {
     this.imageGenerator = new ImageGenerator();
     this.engine = null;
     this.ui = new UIManager();
-    this.ttsEnabled = true;
-    this._ttsQueue = [];
-    this._isSpeaking = false;
+    this.ttsEnabled = false; // TTS disabled - using text only
     this._lastSpokenText = null; // For repeat command
 
     // Wake word state
@@ -1388,10 +1382,8 @@ class App {
     // Start in sleeping state, waiting for wake word
     this._setAwakeState(false);
 
-    // Speak welcome message
-    setTimeout(() => {
-      this.speak('欢迎使用语音绘图工具，说你好唤醒我');
-    }, 500);
+    // Speak welcome message (no delay)
+    this.speak('欢迎使用语音绘图工具，说你好唤醒我');
   }
 
   _handleSpeechResult(data) {
@@ -1404,11 +1396,6 @@ class App {
     if (data.isFinal && data.final) {
       const text = data.final.trim();
       this.ui.updateTranscript(text, true);
-
-      // --- Stop current TTS if speaking ---
-      if (this._isSpeaking) {
-        this.stopSpeaking();
-      }
 
       // --- Wake word logic ---
       if (!this.isAwake) {
@@ -1439,8 +1426,7 @@ class App {
       // --- Awake: process command directly ---
       this._processCommand(text);
 
-      // Reset wake timer after each command attempt
-      this._resetWakeTimer();
+      // Note: wake timer is reset inside _processCommand or after async operations complete
 
       // Clear transcript after a delay
       setTimeout(() => {
@@ -1453,17 +1439,25 @@ class App {
     // 1. Check for system commands first
     if (this._handleSystemCommand(text)) {
       this._clarifyCount = 0; // Reset counter on successful command
+      this._resetWakeTimer(); // Reset wake timer for system commands
       return;
     }
 
-    // 2. Check if it's a drawing request
+    // 2. Check if it's a partial redraw request
+    if (this._isPartialRedraw(text) && this._lastImagePrompt) {
+      this._clarifyCount = 0;
+      this._handlePartialRedraw(text);
+      return; // Wake timer will be reset after image generation completes
+    }
+
+    // 3. Check if it's a drawing request
     if (this._isDrawingRequest(text)) {
       this._clarifyCount = 0; // Reset counter on successful command
       this._handleAgentCommand(text);
-      return;
+      return; // Wake timer will be reset after image generation completes
     }
 
-    // 3. Not a drawing command - ask for clarification with loop
+    // 4. Not a drawing command - ask for clarification with loop
     this._clarifyCount = (this._clarifyCount || 0) + 1;
 
     const responses = [
@@ -1511,10 +1505,59 @@ class App {
 
       // Modification requests (for existing drawings)
       '大一点', '小一点', '放大', '缩小', '换成', '移到',
+
+      // Partial redraw keywords
+      '把', '改成', '换成', '修改', '调整', '变成',
     ];
 
     // Check if text contains any drawing keyword
     return drawKeywords.some(keyword => text.includes(keyword));
+  }
+
+  // Check if this is a partial redraw request
+  _isPartialRedraw(text) {
+    const redrawPatterns = [
+      /把(.+)(改成|换成|变成|调整为)(.+)/,
+      /(.+)改成(.+)/,
+      /(.+)换成(.+)/,
+      /修改(.+)/,
+    ];
+    return redrawPatterns.some(pattern => pattern.test(text));
+  }
+
+  // Handle partial redraw
+  async _handlePartialRedraw(text) {
+    if (!this._lastImagePrompt) {
+      this.speak('请先生成一张图片，然后再进行局部修改');
+      return;
+    }
+
+    // Extract the modification from the text
+    let modification = '';
+    const patterns = [
+      { regex: /把(.+)(改成|换成|变成|调整为)(.+)/, groups: [1, 3] },
+      { regex: /(.+)改成(.+)/, groups: [1] },
+      { regex: /(.+)换成(.+)/, groups: [1] },
+      { regex: /修改(.+)/, groups: [0] },
+    ];
+
+    for (const pattern of patterns) {
+      const match = text.match(pattern.regex);
+      if (match) {
+        modification = pattern.groups.map(i => match[i + 1]).join(' ');
+        break;
+      }
+    }
+
+    if (!modification) {
+      this.speak('请描述你想修改的内容，比如把耳朵改成蓝色');
+      return;
+    }
+
+    // Combine original prompt with modification
+    const newPrompt = `${this._lastImagePrompt}, ${modification}`;
+    this.speak(`正在将${modification}应用到图片上`);
+    await this._executeImageGeneration(newPrompt);
   }
 
   _handleSystemCommand(text) {
@@ -1557,12 +1600,9 @@ class App {
       return true;
     }
 
-    // Toggle TTS
+    // Toggle notification (no TTS, just text)
     if (this._match(text, ['静音', '关闭声音', '闭嘴', '不要说话', '安静'])) {
-      this.ttsEnabled = !this.ttsEnabled;
-      const msg = this.ttsEnabled ? '语音播报已开启' : '语音播报已关闭';
-      this.ui.showToast(msg, 'info');
-      if (this.ttsEnabled) this.speak(msg);
+      this.ui.showToast('文字通知已开启', 'info');
       return true;
     }
 
@@ -1615,34 +1655,16 @@ class App {
     // Repeat last TTS
     if (this._match(text, ['再说一遍', '重复', '再说一次'])) {
       if (this._lastSpokenText) {
-        this.speak(this._lastSpokenText);
+        this.ui.showToast(this._lastSpokenText, 'info');
       } else {
-        this.speak('没有可重复的内容');
+        this.ui.showToast('没有可重复的内容', 'info');
       }
       return true;
     }
 
-    // TTS volume control
-    if (this._match(text, ['大声点', '声音大一点', '音量大'])) {
-      CONFIG.ttsVolume = Math.min(1, CONFIG.ttsVolume + 0.2);
-      this.speak('音量已调大');
-      return true;
-    }
-    if (this._match(text, ['小声点', '声音小一点', '音量小'])) {
-      CONFIG.ttsVolume = Math.max(0.2, CONFIG.ttsVolume - 0.2);
-      this.speak('音量已调小');
-      return true;
-    }
-
-    // TTS speed control
-    if (this._match(text, ['说快点', '语速快'])) {
-      CONFIG.ttsRate = Math.min(2, CONFIG.ttsRate + 0.2);
-      this.speak('语速已加快');
-      return true;
-    }
-    if (this._match(text, ['说慢点', '语速慢'])) {
-      CONFIG.ttsRate = Math.max(0.5, CONFIG.ttsRate - 0.2);
-      this.speak('语速已减慢');
+    // Volume/speed controls no longer needed (TTS disabled)
+    if (this._match(text, ['大声点', '声音大一点', '音量大', '小声点', '声音小一点', '音量小', '说快点', '语速快', '说慢点', '语速慢'])) {
+      this.ui.showToast('语音播报已关闭，当前为文字通知模式', 'info');
       return true;
     }
 
@@ -1876,12 +1898,9 @@ class App {
 
   // ===== Track last spoken text for "repeat" command =====
   speak(text) {
-    if (!this.ttsEnabled) return;
+    // TTS disabled - only show text notification
     this._lastSpokenText = text;
-    this._ttsQueue.push(text);
-    if (!this._isSpeaking) {
-      this._speakNext();
-    }
+    this.ui.showToast(text, 'info');
   }
 
   _setupDraggable(element, handle) {
@@ -1950,9 +1969,14 @@ class App {
   async _executeImageGeneration(prompt) {
     this._clearWakeTimer();
 
-    // Show loading overlay
-    const overlay = document.getElementById('generating-overlay');
-    overlay.classList.remove('hidden');
+    // Stop speech recognition during image generation
+    if (this.speech && this.speech.isListening) {
+      this.speech.stop();
+    }
+    this._blockRecognition = true;
+
+    // Show progress bar
+    this.ui.showProgress();
 
     this.ui.showToast('🎨 正在生成图片，预计需要30-60秒...', 'info');
     this.ui.addHistoryItem(`[AI绘图]`, { success: true, message: `正在生成: ${prompt}` });
@@ -1973,7 +1997,12 @@ class App {
       this.speak('图片生成失败');
       this.ui.addHistoryItem(`[AI绘图]`, { success: false, message: err.message });
     } finally {
-      overlay.classList.add('hidden');
+      this.ui.hideProgress();
+      // Restart speech recognition after image generation
+      this._blockRecognition = false;
+      if (this.speech && !this.speech.isMuted) {
+        setTimeout(() => this.speech.start(), 1000);
+      }
     }
 
     this._resetWakeTimer();
@@ -2074,9 +2103,11 @@ class App {
 
   _setAwakeState(awake) {
     this.isAwake = awake;
-    const bar = this.ui.elements.voiceBar;
-    bar.classList.toggle('sleeping', !awake);
-    bar.classList.toggle('awake', awake);
+    const indicator = this.ui.elements.voiceIndicator;
+    if (!indicator) return;
+
+    indicator.classList.toggle('sleeping', !awake);
+    indicator.classList.toggle('awake', awake);
 
     if (awake) {
       this.ui.elements.voiceStatus.textContent = '🎤 请说出指令...';
@@ -2134,83 +2165,6 @@ class App {
         delay += 400;
       });
     }
-  }
-
-  async _speakNext() {
-    if (this._ttsQueue.length === 0) {
-      this._isSpeaking = false;
-      this._currentAudio = null;
-      return;
-    }
-
-    this._isSpeaking = true;
-    const text = this._ttsQueue.shift();
-
-    try {
-      // Use Edge TTS via server
-      const response = await fetch('/api/tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: text,
-          voice: 'zh-CN-XiaoxiaoNeural',
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error('TTS request failed');
-      }
-
-      const audioBlob = await response.blob();
-      const audioUrl = URL.createObjectURL(audioBlob);
-      const audio = new Audio(audioUrl);
-      this._currentAudio = audio; // Store reference for interruption
-
-      audio.onended = () => {
-        URL.revokeObjectURL(audioUrl);
-        this._currentAudio = null;
-        this._speakNext();
-      };
-
-      audio.onerror = () => {
-        URL.revokeObjectURL(audioUrl);
-        this._currentAudio = null;
-        this._speakNext();
-      };
-
-      await audio.play();
-    } catch (err) {
-      console.error('TTS error:', err);
-      // Fallback to browser speech synthesis
-      this._speakWithBrowserTTS(text);
-    }
-  }
-
-  // Stop current TTS playback and clear queue
-  stopSpeaking() {
-    if (this._currentAudio) {
-      this._currentAudio.pause();
-      this._currentAudio.currentTime = 0;
-      this._currentAudio = null;
-    }
-    this._ttsQueue = [];
-    this._isSpeaking = false;
-  }
-
-  _speakWithBrowserTTS(text) {
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'zh-CN';
-    utterance.rate = CONFIG.ttsRate;
-    utterance.volume = CONFIG.ttsVolume;
-
-    const voices = speechSynthesis.getVoices();
-    const zhVoice = voices.find(v => v.lang.startsWith('zh'));
-    if (zhVoice) utterance.voice = zhVoice;
-
-    utterance.onend = () => this._speakNext();
-    utterance.onerror = () => this._speakNext();
-
-    speechSynthesis.speak(utterance);
   }
 }
 
